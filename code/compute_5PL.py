@@ -3,27 +3,6 @@ import numpy as np
 from scipy.optimize import least_squares
 import re
 
-def get_standard(data_df, col_df, run="20211021", gene='M-CSF', dilution=4):
-    '''
-    returns the standard for that run and the respective gene
-    '''
-    
-    # retrieve only the controls from the raw data
-    control_df = data_df.loc[data_df['Type'].fillna("").str.match(r"^[SC][1-9]?"),:]
-    
-    run = int(run)
-    # retrieve standards and control from control_df
-    s = control_df.query('Run == @run and Gene == @gene')
-    ss = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
-    sc = s.loc[s['Type'].str.match("^C[12]$"),:]
-    
-    # get the starting concentration for that dilution
-    conc = col_df.query('Run == @run and Gene == @gene')['S1'].iloc[0]
-    # fill the dilution series with the last being 0
-    ss.loc[:, 'conc'] = conc / np.power(dilution, ss.loc[:, 'Type'].str.extract("S([1-8])").astype(int)-1)
-    ss.loc[ss['Type'] == "S8", 'conc'] = 0.001
-    return ss.loc[:, ['Run', 'Gene', 'conc', 'FI']]
-
 
 def PL5(conc,params):
     '''
@@ -76,17 +55,6 @@ def fit_standard(s):
     params = list(plsq['x'])
     
     return params, r_squared(params, s)
-
-
-def fit_curve(s):
-    '''
-    returns the fit curve for plotting
-    '''
-    params, R = fit_standard(s)
-    conc = np.power(10, np.linspace(-3, 5, 10000))
-    fit = PL5(conc, params)
-
-    return conc, fit, R, params
 
 
 def get_params_from_string(string):

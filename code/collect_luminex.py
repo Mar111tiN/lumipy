@@ -1,65 +1,13 @@
 import pandas as pd
-import numpy as np
 import os
+import matplotlib.pyplot as plt
 
 from script_utils import show_output
+from lumipy_utils import *
+from compute_5PL import fit_standard, retro_5PL # only needed for placeholder function load_controls
+from plot_fit import plot_fitting
 
-def read_csv_header(csv_file):
-    '''
-    reads the plate_info from a csv raw data file
-    returns series with info
-    '''
-    
-    plate_info = pd.read_csv(csv_file, nrows=6, names=['info'], sep="\t", encoding = "ISO-8859-1")
-    plate_info['PlateID'] = plate_info['info'].str.split(": ").str[0]
-    plate_info['data'] = plate_info['info'].str.split(": ").str[1].str.rstrip(";")
-    plate_info = plate_info.drop('info', axis=1).set_index('PlateID')
-    return plate_info['data']
-
-
-def read_excel_header(excel_file):
-    '''
-    reads the plate_info from a csv raw data file
-    returns series with info
-    '''
-    
-    info = pd.read_excel(excel_file, nrows=6, header=None)
-    plate_info = pd.DataFrame()
-    plate_info['PlateID'] = info[0].str.split(": ").str[0]
-    plate_info['data'] = info[0].str.split(": ").str[1].str.rstrip(";")
-    plate_info = plate_info.set_index('PlateID')
-    
-    return plate_info['data']
-
-
-def read_header(file, is_excel=False):
-    '''
-    reads all the info from a luminex header (excel or csv)
-    '''
-
-    # read basic data based on extension
-    plate_info = read_excel_header(file) if is_excel else read_csv_header(file)
-        
-    # wrangle the data and add run and plex from file name
-    plate_df = plate_info.rename({
-        "Plate ID": "orgPlateID",
-        "File Name": "RawdataPath",
-        "Acquisition Date": "AcquisitionTime",
-        "Reader Serial Number": "ReaderID", 
-        "RP1 PMT (Volts)": "RP1_PMT",
-        "RP1 Target": "RP1_Target"
-    }).to_frame().T.reset_index(drop="True")
-    
-    return plate_df
-
-def get_run_plex(file):
-    '''
-    retrieve run and flex from the file name
-    '''
-    s = os.path.basename(file).split("_")
-    run = s[0]
-    plex = [d for d in s if d.endswith("Plex")][0]
-    return run, plex
+data_cols = ['Run', 'Plex', 'Well', 'Type', 'Gene']
 
 
 def read_raw_plate(file):
@@ -99,44 +47,19 @@ def read_raw_plate(file):
     # stack the data
     data = data.melt(id_vars=['Well', 'Type', 'SamplingErrors'], var_name="Gene", value_name="FI")
     data.loc[:, 'FI'] = data['FI'].str.replace(",", ".").str.replace(r"***", "0", regex=False).astype(float)
-    cols = data.columns
     # add run as id
     data['Run'] = run
     data['Plex'] = plex
-    data = data.loc[:, ['Run', 'Plex'] + list(cols)]
+
+    raw_data_cols = data_cols + ['FI', 'SamplingErrors']
+    data = data.loc[:, raw_data_cols]
     
     # detect if standard has been used
     has_standard = len(data['Type'].str.extract(r"^(S[1-8])$").dropna()[0].unique()) == 8
     header['hasStandard'] = has_standard
-    
+    data = data.sort_values(['Run','Gene', 'Plex', 'Well'])
     return header, data, col_df
 
-def read_standard_from_conc(file):
-    '''
-    reads the expected start concentration for the standards
-    '''
-    # read_out the standard concentrations
-    df = pd.read_excel(file, skiprows=7, sheet_name="Exp Conc")
-    # create a Gene df from the columns
-    col_df = pd.DataFrame(df.columns[2:])[0].str.extract(r"([^(/]+)/?([^(/]+)? \(([0-9]+)\)").rename({0:"Gene", 1:"altGene",2:"col"}, axis=1)
-    col_df['S1'] = df.iloc[1:2,2:].T.reset_index().iloc[:,1].str.replace(",", ".").astype(float)
-    cols = col_df.columns
-    run, plex = get_run_plex(file)
-    col_df['Run'] = run
-    col_df['Plex'] = plex
-    col_df = col_df.loc[:, ['Run', 'Plex'] + list(cols)]
-    return col_df
-
-
-def convert2float(df):
-
-    for col in ['conc']:
-        df.loc[:, col] = df[col].str.replace("---", "-1")
-        df.loc[:, col] = df[col].str.replace(",", ".", regex=False)
-        df.loc[:, col] = df[col].str.replace("OOR <", "-2", regex=False).str.replace("OOR >", "-1", regex=False)
-        df.loc[:, col] = df[col].str.replace("***", "-3", regex=False).str.replace("*", "", regex=False)
-        df.loc[:, col] = df[col].astype(float)
-    return df
 
 
 def read_conc_plate(file):
@@ -165,5 +88,142 @@ def read_conc_plate(file):
     cols = conc_df.columns
     conc_df['Run'] = run
     conc_df['Plex'] = plex
-    conc_df = conc_df.loc[:, ['Run', 'Plex'] + list(cols)] 
+    conc_cols = data_cols + ['conc']
+    conc_df = conc_df.loc[:, conc_cols]
+
+    # sort_values
+    conc_df = conc_df.sort_values(['Run','Gene', 'Plex', 'Well'])
     return conc_df, col_df
+
+
+def compute_fit(col_df, data_df, gene="M-CSF", run="20211021", apply_standard_from_run=0, fig_path="", zero_value=0.1, dilution=4):
+    '''
+    master function for computing and applying fits
+    if fig_path is set, a figure for the standard curve is plotted
+    '''
+
+    # retrieve all the relevant data from the DB
+    ss, sc, sample_df = get_data_types(data_df, col_df, run=run, gene=gene, zero_value=zero_value, dilution=dilution)
+    
+    # load other standard if apply_standard_from_run is set to a value
+    if apply_standard_from_run:
+        ss = get_standard(data_df, col_df, run=apply_standard_from_run, gene=gene, zero_value=zero_value, dilution=dilution)
+
+    # fit the params
+    params, R = fit_standard(ss)
+    
+    # apply the data point to the col_df
+    col_df.loc[(col_df['Run'] == run) & (col_df['Gene'] == gene), ['params', 'R^2']] = [" | ".join([str(round(p,3)) for p in params]), R]
+
+    # load the values for the controls
+    sc.loc[:, 'conc'] = load_controls(sc, col_df, params)
+    
+    # compute the values for the samples
+    sample_df.loc[:, 'conc'] = retro_5PL(sample_df['FI'], params)
+
+    # apply the computed values to the conc_df
+    data_df.loc[(data_df['Run'] == run) & (data_df['Gene'] == gene), 'conc']  = sample_df.loc[:, 'conc']
+    
+    
+    if fig_path:
+        fig, ax = plot_fitting(ss, control_df=sc, sample_df=sample_df, params=params, R=R)
+        # save output
+        fig.savefig(fig_path)
+        plt.close()
+        show_output(f"Saving fitted data to {fig_path}")
+    return data_df, col_df
+
+
+def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", output_path=".", excel_out="luminexel", default_run = 20211021, fig_type="svg"):
+    '''
+    reads all luminex data from one folder
+    '''
+    
+    #### file reading
+    # init the file lists
+    raw_file_list = []
+    
+    conc_file_list = []
+    
+    for f in [folder for folder in os.walk(data_folder)]:
+        folder = f[0]
+        raw_files = [os.path.join(folder, file) for file in f[2] if raw_pattern in file and not os.path.basename(file).startswith("~$")]
+        raw_file_list += raw_files
+        
+        conc_files = [os.path.join(folder, file) for file in f[2] if conc_pattern in file and not os.path.basename(file).startswith("~$")]
+        conc_file_list += conc_files
+
+    # ######### raw files
+    # load in all the raw_files and store data in dfs
+    raw_col_dfs = []
+    data_dfs = []
+    plate_dfs = []
+    # cycle through raw files
+    for file in raw_file_list:
+        show_output(f"Loading raw data file {file}")
+        plate_df, data_df, raw_col_df = read_raw_plate(file)
+        raw_col_dfs.append(raw_col_df)
+        plate_dfs.append(plate_df)
+        data_dfs.append(data_df)
+    
+    plate_df = pd.concat(plate_dfs).sort_values(['Run', 'Plex'])
+    raw_col_df = pd.concat(raw_col_dfs).sort_values(['Run', 'col'])
+    data_df = pd.concat(data_dfs).sort_values(['Run','Gene', 'Plex', 'Type']).reset_index(drop=True)
+    
+    # ######## conc_files
+    conc_col_dfs = []
+    conc_dfs = []
+
+    # cycle through conc files
+    for file in conc_file_list:
+        show_output(f"Loading concentration file {file}")
+        conc_df, col_df = read_conc_plate(file)
+        conc_col_dfs.append(col_df)
+        conc_dfs.append(conc_df)
+    
+    conc_col_df = pd.concat(conc_col_dfs).sort_values(['Run','col']).loc[:, ['Run', 'Gene', 'col', 'S1']]
+    conc_df = pd.concat(conc_dfs).sort_values(['Run','Gene', 'Plex', 'Well']).reset_index(drop=True)    
+    
+    # check for consistency beween the plexes in raw and conc files
+    col_df = raw_col_df.merge(conc_col_df, how="outer")
+    col_df.loc[:, 'Run'] = col_df['Run'].astype(int)
+    data_df.loc[:, 'Run'] = data_df['Run'].astype(int)
+    data_df.loc[~data_df['Type'].str.match(r"^[SC][1-9]$"), 'Type'] = "X"
+    
+    plate_df.loc[:, 'Run'] = plate_df['Run'].astype(int)
+    conc_df.loc[:, 'Run'] = conc_df['Run'].astype(int)
+    conc_df = conc_df.rename({'conc':'conc_CI'}, axis=1)
+    
+    # merge data_df and conc_df for single output
+    # expand the wells for duplicates
+    conc_df = conc_df.set_index(['Run', 'Plex', 'Gene', 'conc_CI'])['Well'].str.extractall(r"(?P<Well>[A-H][0-9]+)").reset_index().drop('match', axis=1)
+
+    data_df = data_df.merge(conc_df, how="left")
+    
+    
+    for run in (runs:= data_df['Run'].unique()):
+        fig_folder = os.path.join(output_path, "curves")
+    
+        # check if run has standard
+        if plate_df.query('Run == @run')['hasStandard'].any():
+            fallback_run = 0
+            add_string = ""
+        else:
+            # if not use the last run
+            fallback_run = default_run
+            add_string = f" using standards from run {fallback_run}"
+        for gene in data_df.query('Run == @run')['Gene'].unique():
+            show_output(f"Computing params for {gene} in run {run}{add_string}")
+            fig_path = os.path.join(fig_folder, f"{run}_{gene}.{fig_type}")
+            data_df, col_df = compute_fit(col_df, data_df, gene=gene, run=run, apply_standard_from_run=fallback_run, fig_path=fig_path, zero_value=0.1, dilution=4)
+    
+    # ##### output
+    # 
+    if excel_out:
+        excel_file = os.path.join(output_path, f"{excel_out}.xlsx")
+        with pd.ExcelWriter(excel_file, mode="w") as writer:
+            plate_df.to_excel(writer, sheet_name="Plates", index=False)
+            col_df.to_excel(writer, sheet_name="Plexes", index=False)
+            data_df.to_excel(writer, sheet_name="RawData", index=False)
+    
+    return plate_df, col_df, data_df
