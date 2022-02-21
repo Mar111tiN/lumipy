@@ -115,11 +115,15 @@ def plot_multi(data_dict_list=[dict(
             ymax = max(ymax, data['ctrl']['FI'].max())
         if not data['st'].empty:
             plot_standard(ax, data['st'], data['params'], color=data['color'], s=50)
+            ymax = max(ymax, data['st']['FI'].max())
             # plots the params info
         x_pos = min(x_pos, data['st']['conc'].min())
-        if show_info:
+
+    # add this list only after ymax has been determined
+    if show_info:
+        for data in data_dict_list:
             R_string = data['R'] if isinstance(data['R'], str) else f"R={round(data['R'],5)}"
-            _ = ax.text(x_pos,ymax - i*ymax/10, f"Run {data['Run']}: {R_string}", size=24, color=data['color'])
+            _ = ax.text(x_pos,ymax - i*ymax/12, f"Run {data['Run']}: {R_string}", size=24, color=data['color'])
             i += 1
     
     # other settings for plot
