@@ -1,6 +1,6 @@
 import pandas as pd
 import os
-from compute_5PL import retro_5PL, fit_standard
+from compute_5PL import retro_5PL  # only needed for placeholder function for control values
 import numpy as np
 from script_utils import show_output
 import re
@@ -91,6 +91,7 @@ def convert2float(df):
         df.loc[:, col] = df[col].astype(float)
     return df
 
+
 def get_standard(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero_value=0.1):
     '''
     returns the standard for that run and the respective gene
@@ -171,6 +172,16 @@ def get_params_from_string(string):
     return [A,B,C,D,E]
 
 
+def get_params_from_col_df(col_df, run="", gene=""):
+    '''
+    retrieves the params (5PL and R) from the col_df
+    '''
+    run = int(run)
+    params, R = col_df.query("Run == @run and Gene == @gene").iloc[0].loc[['params','R^2']]
+    params = [float(p) for p in params.split(" | ")]
+    return params,R
+    
+
 def get_data_dict(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero_value=0.1):
     '''
     provides all the data needed for multi_plotting
@@ -178,8 +189,10 @@ def get_data_dict(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zer
     
     # get the data
     s, c, x = get_data_types(data_df, col_df, run=run, gene=gene, dilution=dilution, zero_value=zero_value)
-    params, R = fit_standard(s)
-    c.loc[:, 'conc'] = retro_5PL(c['FI'], params=params)
+    
+    # get the params from col_df
+    params, R = get_params_from_col_df(col_df, run=run, gene=gene)
+
     # store in dictionary
     data_dict = dict(
         Run=run,
