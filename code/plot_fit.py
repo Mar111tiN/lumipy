@@ -123,7 +123,7 @@ def plot_multi(data_dict_list=[dict(
     if show_info:
         for data in data_dict_list:
             R_string = data['R'] if isinstance(data['R'], str) else f"R={round(data['R'],5)}"
-            _ = ax.text(x_pos,ymax - i*ymax/12, f"Run {data['Run']}: {R_string}", size=24, color=data['color'])
+            _ = ax.text(x_pos,ymax*1.09 - i*ymax/12, f"Run {data['Run']}: {R_string}", size=18, color=data['color'])
             i += 1
     
     # other settings for plot

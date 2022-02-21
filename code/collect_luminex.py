@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from script_utils import show_output
 from lumipy_utils import *
 from compute_5PL import fit_standard, retro_5PL # only needed for placeholder function load_controls
-from plot_fit import plot_fitting
+from plot_fit import plot_fitting, plot_multi
 
 data_cols = ['Run', 'Plex', 'Well', 'Type', 'Gene']
 
@@ -142,6 +142,7 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
     reads all luminex data from one folder
     '''
     
+    run_color={20211021:"green", 20211102:"orange", 20211222:"brown"}
     #### file reading
     # init the file lists
     raw_file_list = []
@@ -209,11 +210,15 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
     if not os.path.isdir(fig_base_folder):
         os.makedirs(fig_base_folder)
 
+    # init ddld ("data_dict_list_dict")
+    # ddld is the dictionary of genes and the respective lists of data_dicts for multiplotting
+    # will be used afterwards for the plotting function as an iterable
+    ddld= {gene:[] for gene in data_df['Gene'].unique()}
     for run in (runs:= data_df['Run'].unique()):
         fig_folder = os.path.join(fig_base_folder, str(run))
         if not os.path.isdir(fig_folder):
             os.makedirs(fig_folder)
-    
+
         # check if run has standard
         if plate_df.query('Run == @run')['hasStandard'].any():
             fallback_run = 0
@@ -226,8 +231,21 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
             show_output(f"Computing params for {gene} in run {run}{add_string}")
             fig_path = os.path.join(fig_folder, f"{run}_{gene}.{fig_type}")
             data_df, col_df = compute_fit(col_df, data_df, gene=gene, run=run, apply_standard_from_run=fallback_run, fig_path=fig_path, zero_value=0.1, dilution=4)
+            # add the gene-run data to the ddld
+            data_dict = get_data_dict(data_df, col_df, run, gene)
+            data_dict['color'] = run_color[run]
+            if fallback_run: 
+                data_dict['R'] = f"Standard from {fallback_run} used!"
+            ddld[gene].append(data_dict)
 
-        # plot the combined plots
+
+    # plot the combined plots
+    for gene in data_df['Gene'].unique():
+        # check for the runs that actually contain data for this data point
+        fig, ax = plot_multi(ddld[gene], show_info=True)
+        fig_path = os.path.join(fig_base_folder, f"{gene}.{fig_type}")
+        fig.savefig(fig_path)
+        plt.close()
 
     # ##### output
     # 
