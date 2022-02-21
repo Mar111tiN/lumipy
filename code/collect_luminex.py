@@ -112,8 +112,9 @@ def compute_fit(col_df, data_df, gene="M-CSF", run="20211021", apply_standard_fr
     # fit the params
     params, R = fit_standard(ss)
     
-    # apply the data point to the col_df
-    col_df.loc[(col_df['Run'] == run) & (col_df['Gene'] == gene), ['params', 'R^2']] = [" | ".join([str(round(p,3)) for p in params]), R]
+    # apply the data point to the col_df if not used from other run
+    if not apply_standard_from_run:
+        col_df.loc[(col_df['Run'] == run) & (col_df['Gene'] == gene), ['params', 'R^2']] = [" | ".join([str(round(p,3)) for p in params]), R]
 
     # load the values for the controls
     sc.loc[:, 'conc'] = load_controls(sc, col_df, params)
@@ -122,15 +123,17 @@ def compute_fit(col_df, data_df, gene="M-CSF", run="20211021", apply_standard_fr
     sample_df.loc[:, 'conc'] = retro_5PL(sample_df['FI'], params)
 
     # apply the computed values to the conc_df
-    data_df.loc[(data_df['Run'] == run) & (data_df['Gene'] == gene), 'conc']  = sample_df.loc[:, 'conc']
-    
-    
+    data_df.loc[(data_df['Run'] == run) & (data_df['Gene'] == gene), 'conc']  = np.round(pd.concat([sample_df, sc, ss]).loc[:, 'conc'],1)
+    # apply the computed values to the conc_df for the controls
+    # data_df.loc[(data_df['Run'] == run) & (data_df['Gene'] == gene)), 'conc']  = sc.loc[:, 'conc']
+
+
     if fig_path:
         fig, ax = plot_fitting(ss, control_df=sc, sample_df=sample_df, params=params, R=R)
         # save output
         fig.savefig(fig_path)
         plt.close()
-        show_output(f"Saving fitted data to {fig_path}")
+        show_output(f"Saving fitted data to {'/'.join(fig_path.split('/')[-3:])}")
     return data_df, col_df
 
 
@@ -201,8 +204,15 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
     data_df = data_df.merge(conc_df, how="left")
     
     
+    #### compute the fit and save the standard curves
+    fig_base_folder = os.path.join(output_path, "curves")
+    if not os.path.isdir(fig_base_folder):
+        os.makedirs(fig_base_folder)
+
     for run in (runs:= data_df['Run'].unique()):
-        fig_folder = os.path.join(output_path, "curves")
+        fig_folder = os.path.join(fig_base_folder, str(run))
+        if not os.path.isdir(fig_folder):
+            os.makedirs(fig_folder)
     
         # check if run has standard
         if plate_df.query('Run == @run')['hasStandard'].any():
@@ -216,14 +226,18 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
             show_output(f"Computing params for {gene} in run {run}{add_string}")
             fig_path = os.path.join(fig_folder, f"{run}_{gene}.{fig_type}")
             data_df, col_df = compute_fit(col_df, data_df, gene=gene, run=run, apply_standard_from_run=fallback_run, fig_path=fig_path, zero_value=0.1, dilution=4)
-    
+
+        # plot the combined plots
+
     # ##### output
     # 
     if excel_out:
         excel_file = os.path.join(output_path, f"{excel_out}.xlsx")
+        show_output(f"Writing excel output to {excel_file}")
         with pd.ExcelWriter(excel_file, mode="w") as writer:
             plate_df.to_excel(writer, sheet_name="Plates", index=False)
             col_df.to_excel(writer, sheet_name="Plexes", index=False)
             data_df.to_excel(writer, sheet_name="RawData", index=False)
     
+    show_output(f"Finished collecting Luminex data for folder {data_folder}", color="success")
     return plate_df, col_df, data_df
