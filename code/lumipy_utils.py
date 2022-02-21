@@ -177,8 +177,10 @@ def get_params_from_col_df(col_df, run="", gene=""):
     retrieves the params (5PL and R) from the col_df
     '''
     run = int(run)
-    params, R = col_df.query("Run == @run and Gene == @gene").iloc[0].loc[['params','R^2']]
-    params = [float(p) for p in params.split(" | ")]
+    params, R = col_df.query("Run == @run and Gene == @gene").iloc[0].fillna("").loc[['params','R^2']]
+    params = [float(p) for p in params.split(" | ")] if params else []
+    if not R:
+        R = "No standard used!"
     return params,R
     
 
@@ -192,7 +194,6 @@ def get_data_dict(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zer
     
     # get the params from col_df
     params, R = get_params_from_col_df(col_df, run=run, gene=gene)
-
     # store in dictionary
     data_dict = dict(
         Run=run,
@@ -200,7 +201,7 @@ def get_data_dict(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zer
         st=s,
         ctrl=c,
         data=x,
-        params=list(params),
+        params=params,
         R=R
     )
     return data_dict
