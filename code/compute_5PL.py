@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from scipy.optimize import least_squares
-import re
 
 
 def PL5(conc,params):
@@ -55,15 +54,3 @@ def fit_standard(s):
     params = list(plsq['x'])
     
     return params, r_squared(params, s)
-
-
-def get_params_from_string(string):
-    '''
-    little helper
-    extracts the params from the luminex curve fit string
-    "Std. Curve: FI = 30,2261 + (14539,8 - 30,2261) / ((1 + (Conc / 678,757)^-1,04439))^1,87946"
-    --> 
-    '''
-    
-    A,B,_,C,D,E = [float(f) for f in re.findall(r"-?[0-9]+\.[0-9]+", string.replace(",", "."))]
-    return [A,B,C,D,E]

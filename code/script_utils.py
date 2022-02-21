@@ -1,7 +1,5 @@
 import os
 from datetime import datetime as dt
-from subprocess import check_call as run
-from datetime import datetime as dt
 
 ansii_colors = {
     "magenta": "[1;35;2m",

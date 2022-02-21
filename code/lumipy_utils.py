@@ -1,7 +1,9 @@
 import pandas as pd
 import os
-from compute_5PL import retro_5PL # only needed for placeholder function load_controls
+from compute_5PL import retro_5PL, fit_standard
 import numpy as np
+from script_utils import show_output
+import re
 
 
 def read_csv_header(csv_file):
@@ -100,6 +102,9 @@ def get_standard(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero
     run = int(run)
     # retrieve standards and control from control_df
     s = control_df.query('Run == @run and Gene == @gene')
+    if s.empty:
+        show_output(f"No data for Run {run} and Gene {gene}!", color="warning")
+        return
     ss = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
     sc = s.loc[s['Type'].str.match("^C[12]$"),:]
     
@@ -119,6 +124,9 @@ def get_data_types(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, ze
     # retrieve only the controls from the raw data
     run = int(run)
     s = data_df.query('Run == @run and Gene == @gene')
+    if s.empty:
+        show_output(f"No data for Run {run} and Gene {gene}!", color="warning")
+        return
     s.loc[:, 'Type'] = s['Type'].fillna("")
 
     # retrieve standards and control from data_df
@@ -141,3 +149,45 @@ def load_controls(sc, col_df, params):
     here used as a place holder with computed values
     '''
     return retro_5PL(sc['FI'], params)
+
+
+def get_params_from_string(string):
+    '''
+    little helper
+    extracts the params from the luminex curve fit string
+    "Std. Curve: FI = 27,863 + (7268,64 - 27,863) / ((1 + (Conc / 101819)^-1,51961))^0,62292"
+    --> [27.863, 7268.64, 101819.0, -1.51961, 0.62292]
+    auto-detects if params are 4PL and adds a 1 for the 5th param for conformity
+    "Std. Curve: FI = 48,6354 + (12224,4 - 48,6354) / (1 + (Conc / 915,213)^-1,26429)"
+    --> [48.6354, 12224.4, 915.213, -1.26429, 1]
+    '''
+    
+    nums = [float(f) for f in re.findall(r"-?[0-9]+(?:\.[0-9]+)?", string.replace(",", "."))]
+    if len(nums) == 6:
+        A,B,_,_,C,D = nums
+        E = 1
+    elif len(nums) == 7:
+        A,B,_,_,C,D,E = nums
+    return [A,B,C,D,E]
+
+
+def get_data_dict(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero_value=0.1):
+    '''
+    provides all the data needed for multi_plotting
+    '''
+    
+    # get the data
+    s, c, x = get_data_types(data_df, col_df, run=run, gene=gene, dilution=dilution, zero_value=zero_value)
+    params, R = fit_standard(s)
+    c.loc[:, 'conc'] = retro_5PL(c['FI'], params=params)
+    # store in dictionary
+    data_dict = dict(
+        Run=run,
+        Gene=gene,
+        st=s,
+        ctrl=c,
+        data=x,
+        params=list(params),
+        R=R
+    )
+    return data_dict
