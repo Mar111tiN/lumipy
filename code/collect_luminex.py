@@ -10,7 +10,7 @@ from plot_fit import plot_fitting, plot_multi
 data_cols = ['Run', 'Plex', 'Well', 'Type', 'Gene']
 
 
-def read_raw_plate(file):
+def read_raw_plate(file, control_df):
     '''
     reads a Luminex raw data file
     autodetects format
@@ -30,12 +30,12 @@ def read_raw_plate(file):
     header['Plex'] = plex
     header = header.loc[:, ['Run', 'Plex'] + list(header.columns[:-2])]
     # read the raw data body
-    data = pd.read_excel(file, skiprows=7) if is_excel else pd.read_csv(file, skiprows=7, sep=";", encoding = "ISO-8859-1")
-    data = data.rename({'Sampling Errors':'SamplingErrors'}, axis=1)
+    data_df = pd.read_excel(file, skiprows=7) if is_excel else pd.read_csv(file, skiprows=7, sep=";", encoding = "ISO-8859-1")
+    data_df = data_df.rename({'Sampling Errors':'SamplingErrors'}, axis=1)
 
     # adjust the Gene headers
-    # get the genes and headers into the col_df
-    col_df = pd.DataFrame(data.columns[2:-1])[0].str.extract(r"([^(/]+)/?([^(/]+)? \(([0-9]+)\)").rename({0:"Gene", 1:"altGene",2:"col"}, axis=1)
+    # get the Plex setup into the col_df and merge with control_df containing the Luminex params
+    col_df = pd.DataFrame(data_df.columns[2:-1]).rename({0:"PlexName"}, axis=1).merge(control_df)
     cols = col_df.columns
     col_df['Run'] = run
     col_df['Plex'] = plex
@@ -43,29 +43,26 @@ def read_raw_plate(file):
     
     
     # apply the cleaned gene names to the column names
-    data.columns = list(data.columns[:2]) + list(col_df['Gene']) + list(data.columns[-1:])
-    # stack the data
-    data = data.melt(id_vars=['Well', 'Type', 'SamplingErrors'], var_name="Gene", value_name="FI")
-    data.loc[:, 'FI'] = data['FI'].str.replace(",", ".").str.replace(r"***", "0", regex=False).astype(float)
+    data_df.columns = list(data_df.columns[:2]) + list(col_df['Protein']) + list(data_df.columns[-1:])
+    data_df = data_df.melt(id_vars=['Well', 'Type', 'SamplingErrors'], var_name="Gene", value_name="FI")
+    data_df.loc[:, 'FI'] = data_df['FI'].str.replace(",", ".").str.replace(r"***", "0", regex=False).astype(float)
     # add run as id
-    data['Run'] = run
-    data['Plex'] = plex
+    data_df['Run'] = run
+    data_df['Plex'] = plex
 
     raw_data_cols = data_cols + ['FI', 'SamplingErrors']
-    data = data.loc[:, raw_data_cols]
+    data_df = data_df.loc[:, raw_data_cols]
     
     # detect if standard has been used
-    has_standard = len(data['Type'].str.extract(r"^(S[1-8])$").dropna()[0].unique()) == 8
+    has_standard = len(data_df['Type'].str.extract(r"^(S[1-8])$").dropna()[0].unique()) == 8
     header['hasStandard'] = has_standard
-    data = data.sort_values(['Run','Gene', 'Plex', 'Well'])
-    return header, data, col_df
-
+    data_df = data_df.sort_values(['Run','Plex', 'Type', 'Gene', 'Well'])
+    return header, data_df, col_df
 
 
 def read_conc_plate(file):
     '''
-    reads from a checkimmune output excel file both the expected concentrations of the respective plex --> col_df
-    and the computed values --> conc_df
+    reads from a checkimmune output excel file the computed values --> conc_df
     '''
     
     # read the plex info
@@ -141,19 +138,18 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
     '''
     reads all luminex data from one folder
     '''
-    
+
     run_color={20211021:"green", 20211102:"orange", 20211222:"brown"}
     #### file reading
     # init the file lists
     raw_file_list = []
-    
     conc_file_list = []
-    
+
     for f in [folder for folder in os.walk(data_folder)]:
         folder = f[0]
         raw_files = [os.path.join(folder, file) for file in f[2] if raw_pattern in file and not os.path.basename(file).startswith("~$")]
         raw_file_list += raw_files
-        
+
         conc_files = [os.path.join(folder, file) for file in f[2] if conc_pattern in file and not os.path.basename(file).startswith("~$")]
         conc_file_list += conc_files
 
@@ -162,6 +158,7 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
     raw_col_dfs = []
     data_dfs = []
     plate_dfs = []
+
     # cycle through raw files
     for file in raw_file_list:
         show_output(f"Loading raw data file {file}")
@@ -169,11 +166,11 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
         raw_col_dfs.append(raw_col_df)
         plate_dfs.append(plate_df)
         data_dfs.append(data_df)
-    
+
     plate_df = pd.concat(plate_dfs).sort_values(['Run', 'Plex'])
     raw_col_df = pd.concat(raw_col_dfs).sort_values(['Run', 'col'])
     data_df = pd.concat(data_dfs).sort_values(['Run','Gene', 'Plex', 'Type']).reset_index(drop=True)
-    
+
     # ######## conc_files
     conc_col_dfs = []
     conc_dfs = []
@@ -184,20 +181,20 @@ def read_luminex(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", ou
         conc_df, col_df = read_conc_plate(file)
         conc_col_dfs.append(col_df)
         conc_dfs.append(conc_df)
-    
+
     conc_col_df = pd.concat(conc_col_dfs).sort_values(['Run','col']).loc[:, ['Run', 'Gene', 'col', 'S1']]
     conc_df = pd.concat(conc_dfs).sort_values(['Run','Gene', 'Plex', 'Well']).reset_index(drop=True)    
-    
+
     # check for consistency beween the plexes in raw and conc files
     col_df = raw_col_df.merge(conc_col_df, how="outer")
     col_df.loc[:, 'Run'] = col_df['Run'].astype(int)
     data_df.loc[:, 'Run'] = data_df['Run'].astype(int)
     data_df.loc[~data_df['Type'].str.match(r"^[SC][1-9]$"), 'Type'] = "X"
-    
+
     plate_df.loc[:, 'Run'] = plate_df['Run'].astype(int)
     conc_df.loc[:, 'Run'] = conc_df['Run'].astype(int)
     conc_df = conc_df.rename({'conc':'conc_CI'}, axis=1)
-    
+
     # merge data_df and conc_df for single output
     # expand the wells for duplicates
     conc_df = conc_df.set_index(['Run', 'Plex', 'Gene', 'conc_CI'])['Well'].str.extractall(r"(?P<Well>[A-H][0-9]+)").reset_index().drop('match', axis=1)
