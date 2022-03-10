@@ -1,9 +1,10 @@
-import pandas as pd
 import os
-from compute_5PL import retro_5PL  # only needed for placeholder function for control values
-import numpy as np
-from script_utils import show_output
 import re
+import numpy as np
+import pandas as pd
+
+from compute_5PL import retro_5PL  # only needed for placeholder function for control values
+from script_utils import show_output
 
 
 def read_csv_header(csv_file):
@@ -58,9 +59,11 @@ def get_run_plex(file):
     '''
     retrieve run and flex from the file name
     '''
-    s = os.path.basename(file).split("_")
-    run = s[0]
-    plex = [d for d in s if d.endswith("Plex")][0]
+    for s in os.path.basename(file).split("_"):
+        if re.match(r"[0-9]+-Plex", s):
+            plex = s
+        elif re.match(r"[0-9]{8}", s):
+                run = s
     return run, plex
 
 
@@ -68,10 +71,13 @@ def read_standard_from_conc(file):
     '''
     reads the expected start concentration for the standards
     '''
+
     # read_out the standard concentrations
     df = pd.read_excel(file, skiprows=7, sheet_name="Exp Conc")
     # create a Gene df from the columns
-    col_df = pd.DataFrame(df.columns[2:])[0].str.extract(r"([^(/]+)/?([^(/]+)? \(([0-9]+)\)").rename({0:"Gene", 1:"altGene",2:"col"}, axis=1)
+    col_df = pd.DataFrame(df.columns[2:]).rename({0:"PlexName"}, axis=1)
+    # extract useful columns
+    col_df.loc[:, ['Protein', 'altProtein', 'PlexCol']] = col_df['PlexName'].str.extract(r"([^(/]+)/?([^(/]+)? \(([0-9]+)\)").rename({0:"Protein", 1:"altProtein",2:"PlexCol"}, axis=1)
     col_df['S1'] = df.iloc[1:2,2:].T.reset_index().iloc[:,1].str.replace(",", ".").astype(float)
     cols = col_df.columns
     run, plex = get_run_plex(file)
