@@ -27,7 +27,17 @@ def plot_standard(ax, st_df, params, color="blue", ymax=10000, zero_value=0.1, *
     _ = ax.scatter(conc, fit, color=color, s=.1, alpha=0.5)
     _ = ax.scatter(st_df['conc'], st_df['FI'], color=color, **kwargs)
 
+
+def plot_controls(ax, data_df, **kwargs):
+    '''
+    subplot the standard curve
+    '''
     
+    # fit the curve
+    _ = ax.scatter(data_df['Cmin'], data_df['FI'], **kwargs, s=150) #  - np.abs(data_df['Coff']) * 74)
+    _ = ax.scatter(data_df['Cmax'], data_df['FI'], **kwargs, s=150) #  - np.abs(data_df['Coff']) * 74)
+
+
 def plot_values(ax, data_df, **kwargs):
     '''
     subplot the standard curve
@@ -37,21 +47,25 @@ def plot_values(ax, data_df, **kwargs):
     _ = ax.scatter(data_df['conc'], data_df['FI'], **kwargs)
 
     
-def plot_fitting(st_df, sample_df=pd.DataFrame(), control_df=pd.DataFrame(), params=[], R="", zero_value=0.1, show_params=True):
+def plot_fitting(data_dict, zero_value=0.1, show_params=True):
     '''
     calculate samples for a given set of 
     '''
     
     # make sure, params is a list
-    params = list(params)
-    
-    
-    # init the plot
+    params = list(data_dict['params'])
+    R = data_dict['R']
+    s = data_dict['data']
+    # extract the control, standard and samples from the data_df
+    st_df = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
+    sample_df = s.loc[~s['Type'].str.match("^[SC][1-8]$"), :]
+    control_df = s.loc[s['Type'].str.match("^[C][12]$"), :]
     fig, ax = plt.subplots(figsize=(12,12))
     
     # calculate R if R is not given
     if not R:
-        R = r_squared(params, st_df) 
+        R = r_squared(params, st_df)
+
     ymax = st_df['FI'].max()
     
     if not sample_df.empty:
@@ -59,7 +73,7 @@ def plot_fitting(st_df, sample_df=pd.DataFrame(), control_df=pd.DataFrame(), par
         ymax = max(ymax, sample_df['FI'].max())
 
     if not control_df.empty:
-        plot_values(ax, control_df, color="yellow", s=150)
+        plot_controls(ax, control_df, color="yellow")
         ymax = max(ymax, control_df['FI'].max())
 
     plot_standard(ax, st_df, params, color="blue", s=50)
@@ -78,7 +92,7 @@ def plot_fitting(st_df, sample_df=pd.DataFrame(), control_df=pd.DataFrame(), par
     _ = plt.xticks(fontsize=20)
     _ = plt.yticks(fontsize=20)
 
-    gene = st_df['Gene'].iloc[0]
+    gene = st_df['Protein'].iloc[0]
     plt.title(f"{gene} | R={round(R,5)}", fontsize=30)
     
     return fig, ax
@@ -87,8 +101,6 @@ def plot_fitting(st_df, sample_df=pd.DataFrame(), control_df=pd.DataFrame(), par
 def plot_multi(data_dict_list=[dict(
         Run="",
         Gene="",
-        st=pd.DataFrame(),
-        ctrl=pd.DataFrame(),
         data=pd.DataFrame(),
         params=[],
         R=0,
@@ -106,24 +118,29 @@ def plot_multi(data_dict_list=[dict(
     # init ymax and xpos and i for text info
     ymax,x_pos,i = (0,np.Inf,0)
 
-    for data in data_dict_list:
-        if not data['data'].empty:
-            plot_values(ax, data['data'], color=data['color'], s=80, alpha=0.8, marker="x")
-            ymax = max(ymax, data['data']['FI'].max())
-        if not data['ctrl'].empty:
-            plot_values(ax, data['ctrl'], color="yellow", s=150)
-            ymax = max(ymax, data['ctrl']['FI'].max())
-        if not data['st'].empty:
-            plot_standard(ax, data['st'], data['params'], color=data['color'], s=50)
-            ymax = max(ymax, data['st']['FI'].max())
+    for data_dict in data_dict_list:
+        s = data_dict['data']
+        # extract the control, standard and samples from the data_df
+        st_df = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
+        sample_df = s.loc[~s['Type'].str.match("^[SC][1-8]$"), :]
+        control_df = s.loc[s['Type'].str.match("^[C][12]$"), :]
+        if not sample_df.empty:
+            plot_values(ax, sample_df, color=data_dict['color'], s=80, alpha=0.8, marker="x")
+            ymax = max(ymax, sample_df['FI'].max())
+        if not control_df.empty:
+            plot_values(ax, control_df, color="yellow", s=150)
+            ymax = max(ymax, control_df['FI'].max())
+        if not st_df.empty:
+            plot_standard(ax, st_df, data_dict['params'], color=data_dict['color'], s=50)
+            ymax = max(ymax, st_df['FI'].max())
             # plots the params info
-        x_pos = min(x_pos, data['st']['conc'].min())
+        x_pos = min(x_pos, st_df['conc'].min())
 
     # add this list only after ymax has been determined
     if show_info:
-        for data in data_dict_list:
-            R_string = data['R'] if isinstance(data['R'], str) else f"R={round(data['R'],5)}"
-            _ = ax.text(x_pos,ymax*1.09 - i*ymax/12, f"Run {data['Run']}: {R_string}", size=18, color=data['color'])
+        for data_dict in data_dict_list:
+            R_string = data_dict['R'] if isinstance(data_dict['R'], str) else f"R={round(data_dict['R'],5)}"
+            _ = ax.text(x_pos,ymax*1.09 - i*ymax/12, f"Run {data_dict['Run']}: {R_string}", size=18, color=data_dict['color'])
             i += 1
     
     # other settings for plot
@@ -134,7 +151,7 @@ def plot_multi(data_dict_list=[dict(
     _ = plt.xticks(fontsize=20)
     _ = plt.yticks(fontsize=20)
 
-    gene = data_dict_list[0]['Gene']
-    plt.title(f"{gene}", fontsize=30)
+    protein = data_dict_list[0]['Protein']
+    plt.title(f"{protein}", fontsize=30)
     
     return fig, ax
