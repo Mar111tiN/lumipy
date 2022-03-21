@@ -54,3 +54,28 @@ def fit_standard(s):
     params = list(plsq['x'])
     
     return params, r_squared(params, s)
+
+
+def compute_samples(df, params):
+    '''
+    calculate the expected controls/samples from 5PL fit and compare to bounds from
+    luminex params
+    Coff is the relative distance of computed conc from range limited by Cmean and Cbound
+    '''
+
+    # compute the concentration from the fit for all non-standard samples
+    df.loc[df['conc'] != df['conc'], "conc"] = retro_5PL(df['FI'], params)
+    df.loc[:, "bound"] = np.log(df['Cmax']/df['Cmin']) / 2
+    df['Coff'] = (np.log((df['conc'] + .1) / df['Cmin']) - df['bound']) / df['bound']
+    return df
+
+
+def get_confidence(params, fraction=0.9):
+    '''
+    returns Cmin and Cmax (as onfidence range around that mean for given 5PL-params)
+    '''
+    Frange = (params[1] - params[0])
+    FoffSet = Frange * (1-fraction) / 2
+    Fmin = params[0] + FoffSet
+    Fmax = params[1] - FoffSet
+    return list(retro_5PL(pd.DataFrame([Fmin, Fmax]), params)[0])

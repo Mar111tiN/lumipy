@@ -3,7 +3,6 @@ import re
 import numpy as np
 import pandas as pd
 
-from compute_5PL import retro_5PL  # only needed for placeholder function for control values
 from script_utils import show_output
 
 
@@ -67,24 +66,50 @@ def get_run_plex(file):
     return run, plex
 
 
-def read_standard_from_conc(file):
+def isMatch(conc_file, run, plex):
     '''
-    reads the expected start concentration for the standards
+    checks if a conc_file fits to a run and plex combo
     '''
+    
+    crun, cplex = get_run_plex(conc_file)
+    
+    return (crun == run) & (cplex == plex)
 
-    # read_out the standard concentrations
-    df = pd.read_excel(file, skiprows=7, sheet_name="Exp Conc")
-    # create a Gene df from the columns
-    col_df = pd.DataFrame(df.columns[2:]).rename({0:"PlexName"}, axis=1)
-    # extract useful columns
-    col_df.loc[:, ['Protein', 'altProtein', 'PlexCol']] = col_df['PlexName'].str.extract(r"([^(/]+)/?([^(/]+)? \(([0-9]+)\)").rename({0:"Protein", 1:"altProtein",2:"PlexCol"}, axis=1)
-    col_df['S1'] = df.iloc[1:2,2:].T.reset_index().iloc[:,1].str.replace(",", ".").astype(float)
-    cols = col_df.columns
-    run, plex = get_run_plex(file)
-    col_df['Run'] = run
-    col_df['Plex'] = plex
-    col_df = col_df.loc[:, ['Run', 'Plex'] + list(cols)]
-    return col_df
+
+def get_luminex_plates(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc"):
+    '''
+    create a data_list containing the raw_data and conc excel files
+    for a given folder (recursively)
+    output:
+    list of
+    {
+        'run': 20211021,
+        'plex': '11-Plex',
+        'raw': <path_to_raw_data_file>,
+        'conc': <path_to_conc_excel_file> or None
+    }
+    '''
+    
+    # init the file lists
+    raw_file_list = []
+    conc_file_list = []
+
+    for f in [folder for folder in os.walk(data_folder)]:
+        folder = f[0]
+        raw_files = [os.path.join(folder, file) for file in f[2] if raw_pattern in file and not os.path.basename(file).startswith("~$")]
+        raw_file_list += raw_files
+
+        conc_files = [os.path.join(folder, file) for file in f[2] if conc_pattern in file and not os.path.basename(file).startswith("~$")]
+        conc_file_list += conc_files
+        
+    # find the matching conc files
+    plate_list = []
+    for raw_file in raw_file_list:
+        run, plex = get_run_plex(raw_file)
+        conc_files = [f for f in conc_file_list if isMatch(f, run, plex)]
+        conc_file = conc_files[0] if len(conc_files) else None
+        plate_list.append(dict(run=run, plex=plex, raw=raw_file, conc=conc_file))
+    return plate_list
 
 
 def convert2float(df):
@@ -98,9 +123,9 @@ def convert2float(df):
     return df
 
 
-def get_standard(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero_value=0.1):
+def get_standard(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, zero_value=0.1):
     '''
-    returns the standard for that run and the respective gene
+    returns the standard for that run and the respective protein
     '''
     
     # retrieve only the controls from the raw data
@@ -108,31 +133,31 @@ def get_standard(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero
     
     run = int(run)
     # retrieve standards and control from control_df
-    s = control_df.query('Run == @run and Gene == @gene')
+    s = control_df.query('Run == @run and Protein == @protein')
     if s.empty:
-        show_output(f"No data for Run {run} and Gene {gene}!", color="warning")
+        show_output(f"No data for Run {run} and Protein {protein}!", color="warning")
         return
     ss = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
     sc = s.loc[s['Type'].str.match("^C[12]$"),:]
     
     # get the starting concentration for that dilution
-    conc = col_df.query('Run == @run and Gene == @gene')['S1'].iloc[0]
+    conc = col_df.query('Run == @run and Protein == @protein')['S1'].iloc[0]
     # fill the dilution series with the last being 0
     ss.loc[:, 'conc'] = conc / np.power(dilution, ss.loc[:, 'Type'].str.extract("S([1-8])", expand=False).astype(int)-1)
     ss.loc[ss['Type'] == "S8", 'conc'] = zero_value
-    return ss.loc[:, ['Run', 'Gene', 'conc', 'FI']]
+    return ss
 
 
-def get_data_types(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero_value=0.1):
+def get_data_types(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, zero_value=0.1):
     '''
     returns the standard for that run and the respective gene
     '''
     
     # retrieve only the controls from the raw data
     run = int(run)
-    s = data_df.query('Run == @run and Gene == @gene')
+    s = data_df.query('Run == @run and Protein == @protein')
     if s.empty:
-        show_output(f"No data for Run {run} and Gene {gene}!", color="warning")
+        show_output(f"No data for Run {run} and Protein {protein}!", color="warning")
         return
     s.loc[:, 'Type'] = s['Type'].fillna("")
 
@@ -141,21 +166,24 @@ def get_data_types(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, ze
     sc = s.loc[s['Type'].str.match("^C[12]$"),:]
     sx = s.loc[~s['Type'].str.match("^[SC][1-8]$"), :]
     # get the starting concentration for that dilution
-    conc = col_df.query('Run == @run and Gene == @gene')['S1'].iloc[0]
+    conc = col_df.query('Run == @run and Protein == @protein')['S1'].iloc[0]
     # fill the dilution series with the last being 0
     ss.loc[:, 'conc'] = conc / np.power(dilution, ss['Type'].str.extract("S([1-8])", expand=False).astype(int)-1)
     ss.loc[ss['Type'] == "S8", 'conc'] = zero_value
-    
-    ss = ss.loc[:, ['Run', 'Gene', 'conc', 'FI']]
+
     return ss, sc, sx
 
 
-def load_controls(sc, col_df, params):
+def load_controls(sc, col_df):
     '''
-    is supposed to load the known control concentrations
-    here used as a place holder with computed values
+    loads the range of known control concentrations
+    and adds as cols Cmean and Cbound (upper lower spread)
     '''
-    return retro_5PL(sc['FI'], params)
+    
+    range_df = col_df.merge(sc.loc[:, ['Run', 'Protein']]).drop_duplicates().loc[:, ['C1', 'C2']].T[0].str.extract(r"(?P<Cmin>[0-9]+) ?[-–] ?(?P<Cmax>[0-9]+)").astype(int)
+    # after the first round, Cmin and Cmax will have been added and need to be remove lest (Cmin_x, Cmin_y) be created
+    sc = sc.drop(['Cmin', 'Cmax'], axis=1, errors="ignore").merge(range_df.loc[:, ['Cmin', 'Cmax']], left_on="Type", right_index=True)
+    return sc
 
 
 def get_params_from_string(string):
@@ -178,32 +206,32 @@ def get_params_from_string(string):
     return [A,B,C,D,E]
 
 
-def get_params_from_col_df(col_df, run="", gene=""):
+def get_params_from_col_df(col_df, run="", protein=""):
     '''
     retrieves the params (5PL and R) from the col_df
     '''
     run = int(run)
-    params, R = col_df.query("Run == @run and Gene == @gene").iloc[0].fillna("").loc[['params','R^2']]
+    params, R = col_df.query("Run == @run and Protein == @protein").iloc[0].fillna("").loc[['params','R^2']]
     params = [float(p) for p in params.split(" | ")] if params else []
     if not R:
         R = "No standard used!"
     return params,R
     
 
-def get_data_dict(data_df, col_df, run="20211021", gene='M-CSF', dilution=4, zero_value=0.1):
+def get_data_dict(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, zero_value=0.1):
     '''
     provides all the data needed for multi_plotting
     '''
     
     # get the data
-    s, c, x = get_data_types(data_df, col_df, run=run, gene=gene, dilution=dilution, zero_value=zero_value)
+    s, c, x = get_data_types(data_df, col_df, run=run, protein=protein, dilution=dilution, zero_value=zero_value)
     
     # get the params from col_df
-    params, R = get_params_from_col_df(col_df, run=run, gene=gene)
+    params, R = get_params_from_col_df(col_df, run=run, protein=protein)
     # store in dictionary
     data_dict = dict(
         Run=run,
-        Gene=gene,
+        Protein=protein,
         st=s,
         ctrl=c,
         data=x,
