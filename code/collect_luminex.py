@@ -28,7 +28,8 @@ def read_raw_plate(plate, control_df):
     header = read_header(plate['raw'], is_excel)
     header['Run'] = run
     header['Plex'] = plex
-    header = header.loc[:, ['Run', 'Plex'] + list(header.columns[:-2])]
+    header['FolderPath'] = plate['raw']
+    header = header.loc[:, ['Run', 'Plex', 'FolderPath'] + list(header.columns[:-3])]
     # read the raw data body
     data_df = pd.read_excel(plate['raw'], skiprows=7) if is_excel else pd.read_csv(plate['raw'], skiprows=7, sep=";", encoding = "ISO-8859-1")
     data_df = data_df.rename({'Sampling Errors':'SamplingErrors'}, axis=1)
@@ -163,9 +164,10 @@ def fit4all(data_df, col_df, plate_df, output_path=".", zero_value=0.1, dilution
     '''
     
     # create figure folder
-    fig_base_folder = os.path.join(output_path, "curves")
-    if not os.path.isdir(fig_base_folder):
-        os.makedirs(fig_base_folder)    
+    if plot_fit or plot_combined_graphs:
+        fig_base_folder = os.path.join(output_path, "curves")
+        if not os.path.isdir(fig_base_folder):
+            os.makedirs(fig_base_folder)    
         
     # init ddld ("data_dict_list_dict")
     # ddld is the dictionary of genes and the respective lists of data_dicts for multiplotting
@@ -222,9 +224,19 @@ def read_luminex_folder(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_co
         return
     control_df = pd.read_excel(params_file, sheet_name="Controls").merge(pd.read_excel(params_file, sheet_name="Proteins").loc[:, ['PlexName', 'Protein']]).loc[:, ['PlexName', 'Protein', 'C1', 'C2', 'S1']]
     
+    # check if excel_file already exists and 
+    if excel_out:
+        excel_file = os.path.join(output_path, f'{excel_out.replace(".xlsx", "").replace("xls", "")}.xlsx')
+        # create has_excel flag for use in plate_list and below for saving to file
+        use_file = excel_file if (has_excel := os.path.isfile(excel_file)) else ""
     #### file reading
-    plate_list = get_luminex_plates(data_folder, raw_pattern=raw_pattern, conc_pattern=conc_pattern)
-
+    plate_list = get_luminex_plates(data_folder, use_file=use_file, raw_pattern=raw_pattern, conc_pattern=conc_pattern)
+    if not(len(plate_list)):
+        show_output(f"No new data found in {data_folder}!", color="warning")
+        if excel_out:
+            return read_luminexcel(excel_file)
+        else:
+            return pd.DataFrame(), pd.DataFrame(),pd.DataFrame()
     # ######### raw files
     # load in all the raw_files and store data in dfs
     col_dfs = []
@@ -246,6 +258,9 @@ def read_luminex_folder(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_co
          
     # combine to dfs
     plate_df = pd.concat(plate_dfs).sort_values(['Run', 'Plex'])
+    # remove the absolute path from the FolderPath for the raw_plates to keep it compatible to moving the data
+    plate_df.loc[:, 'FolderPath'] = plate_df['FolderPath'].str.replace(f"{data_folder}/", "")
+
     col_df = pd.concat(col_dfs).sort_values(['Run', 'Plex', 'Protein']).drop_duplicates(['Run', 'Plex', 'Protein'])
     data_df = pd.concat(data_dfs).sort_values(['Run', 'Plex', 'Protein', 'Type', 'Well']).reset_index(drop=True)
 
@@ -261,12 +276,21 @@ def read_luminex_folder(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_co
            
     # ##### output
     if excel_out:
-        excel_file = os.path.join(output_path, f"{excel_out}.xlsx")
-        show_output(f"Writing excel output to {excel_file}")
+        # check whether the file already exists
+        if has_excel:
+            # add the new stuff to the old sheets and sort again
+            show_output(f"Adding new data to {excel_file}")
+            plate_df_old, col_df_old, data_df_old = read_luminexcel(excel_file)
+            plate_df = pd.concat([plate_df_old, plate_df]).sort_values(['Run', 'Plex'])
+            col_df = pd.concat([col_df_old, col_df]).sort_values(['Run', 'Plex', 'Protein']).drop_duplicates(['Run', 'Plex', 'Protein'])
+            data_df = pd.concat([data_df_old, data_df]).sort_values(['Run', 'Plex', 'Protein', 'Type', 'Well']).drop_duplicates(['Run', 'Plex', 'Protein', 'Well'])
+        else:
+            show_output(f"Writing excel output to {excel_file}")
         with pd.ExcelWriter(excel_file, mode="w") as writer:
             plate_df.to_excel(writer, sheet_name="Plates", index=False)
             col_df.to_excel(writer, sheet_name="Plexes", index=False)
             # Cmin and Cmax should be dropped for actual output
             data_df.to_excel(writer, sheet_name="RawData", index=False)       
-    
-    return plate_df, col_df, data_df
+    show_output(f"Finished collecting Luminex data for folder {data_folder}", color="success")
+    return plate_df, col_df, data_df          
+

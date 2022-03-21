@@ -76,7 +76,7 @@ def isMatch(conc_file, run, plex):
     return (crun == run) & (cplex == plex)
 
 
-def get_luminex_plates(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc"):
+def get_luminex_plates(data_folder, use_file="", raw_pattern="Rawdata", conc_pattern="ISA_conc"):
     '''
     create a data_list containing the raw_data and conc excel files
     for a given folder (recursively)
@@ -93,7 +93,10 @@ def get_luminex_plates(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_con
     # init the file lists
     raw_file_list = []
     conc_file_list = []
-
+    
+    # load the existing raw_files:
+    previous_raw_files = list(pd.read_excel(use_file, sheet_name="Plates")['FolderPath']) if use_file else []
+    
     for f in [folder for folder in os.walk(data_folder)]:
         folder = f[0]
         raw_files = [os.path.join(folder, file) for file in f[2] if raw_pattern in file and not os.path.basename(file).startswith("~$")]
@@ -105,6 +108,10 @@ def get_luminex_plates(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_con
     # find the matching conc files
     plate_list = []
     for raw_file in raw_file_list:
+        # skip if file has been found in excel_output
+        if (short_file := raw_file.replace(f"{data_folder}/", "")) in previous_raw_files:
+            show_output(f"{short_file} is already included and will be skipped.", color="warning")
+            continue
         run, plex = get_run_plex(raw_file)
         conc_files = [f for f in conc_file_list if isMatch(f, run, plex)]
         conc_file = conc_files[0] if len(conc_files) else None
@@ -239,3 +246,13 @@ def get_data_dict(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, 
         R=R
     )
     return data_dict
+
+
+def read_luminexcel(excel_path):
+    '''
+    load all the data from the luminexcel file
+    '''
+    plate_df = pd.read_excel(excel_path, sheet_name="Plates")
+    col_df = pd.read_excel(excel_path, sheet_name="Plexes")
+    data_df = pd.read_excel(excel_path, sheet_name="RawData")
+    return plate_df, col_df, data_df
