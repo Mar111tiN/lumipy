@@ -88,7 +88,8 @@ def read_conc_plate(plate, col_df):
     conc_df.columns = ['Type', 'Well'] + list(col_df['Protein'])
     # keep only data columns
     conc_df = conc_df.query('Well == Well')
-    conc_df = conc_df.loc[~(conc_df['Type'].str.match(r"[eE]?[SC][1-8]")), :].reset_index(drop=True)
+    # remove external standards (eS1...)
+    conc_df = conc_df.loc[~(conc_df['Type'].str.match(r"[eE][SC][1-8]")), :].reset_index(drop=True)
     conc_df = conc_df.melt(id_vars=['Well', 'Type'], var_name="Protein", value_name="conc")
 
     # add run as id
