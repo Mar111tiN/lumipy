@@ -4,294 +4,287 @@ import matplotlib.pyplot as plt
 
 from script_utils import show_output
 from lumipy_utils import *
-from compute_5PL import fit_standard, get_confidence, compute_samples
+from compute_5PL import compute_conc, analyse_control, analyse_standard
 from plot_fit import plot_fitting, plot_multi
 
-data_cols = ['Run', 'Plex', 'Well', 'Type', 'Gene']
+
 run_color={20211021:"green", 20211102:"orange", 20211222:"brown"}
 
-def read_raw_plate(plate, control_df):
+
+def fit_standard_row(standard_row, data_df=pd.DataFrame(), **fit_config):
+    '''
+    for every row of the standards the fit_params and other coefficients
+    pass kwargs for standards and plotting
+    '''
+    
+    # filter for the protein
+    s = data_df.loc[data_df['Protein'] == standard_row['Protein'], :]  
+    
+    standard_row = analyse_standard(standard_row, s, **fit_config)
+    # get the confidence information about the control samples
+    standard_row = analyse_control(standard_row, s)
+    # get the samples
+    sx = s.loc[s['Type'] == "X", :]
+    standard_row['data'] = compute_conc(sx, standard_row)
+    
+    return standard_row
+
+
+def read_raw_plate(plate, control_df, config={}):
     '''
     reads a Luminex raw data file
     autodetects format
-    returns plate_data as series and well_raw data a df
+    returns: 
+        plate_info as series with information about the plate
+        standard_df with computed fit params
+        raw_df containing raw FI and computed concentrations
     '''
-    
-    # get info from filename
-    run, plex = plate['run'], plate['plex']
-    
-    ### header
+
+    # set the raw_file with the data_path
+    raw_file = os.path.join(config['data_path'], plate['rawPath'])
+    ### GET HEADER ##########################
     # read file depending on extension 
-    is_excel = plate['raw'].split(".")[-1].startswith("xls")
-    show_output(f"Run {plate['run']} {plate['plex']}: Loading raw data file.")
+    is_excel = raw_file.split(".")[-1].startswith("xls")
+    show_output(f"Run {plate['Run']} {plate['Plex']} Plate{plate['Plate']}: Loading raw data file {plate['rawPath']}.")
     # read header and add 
-    header = read_header(plate['raw'], is_excel)
-    header['Run'] = run
-    header['Plex'] = plex
-    header['FolderPath'] = plate['raw']
-    header = header.loc[:, ['Run', 'Plex', 'FolderPath'] + list(header.columns[:-3])]
+    plate = pd.concat([plate,read_header(raw_file, is_excel)])
     # read the raw data body
-    data_df = pd.read_excel(plate['raw'], skiprows=7) if is_excel else pd.read_csv(plate['raw'], skiprows=7, sep=";", encoding = "ISO-8859-1")
-    data_df = data_df.rename({'Sampling Errors':'SamplingErrors'}, axis=1)
+    if is_excel:
+        data_df = pd.read_excel(raw_file, skiprows=7)
+    else:
+        data_df = pd.read_csv(raw_file, skiprows=7, sep=";", encoding = "ISO-8859-1")
+    data_df = data_df.rename({'Sampling Errors':'SE'}, axis=1)
+    # clean the Type from 
+    data_df.loc[:, 'Type'] = data_df['Type'].str.strip(" ").fillna("")
+     # detect if standard has been used
+    # has_standard = len(raw_df['Type'].str.extract(r"^(S[1-8])$").dropna()[0].unique()) > 2
+    # !!! some samples have Type S1 to S20 or so which are NOT standards --> so here is the fix:
+    standard_length = len(data_df['Type'].str.extract(r"^(S[1-9]+)$").dropna()[0])
+    plate['hasStandard'] = (standard_length > 2 and standard_length < 17)
+    # assign every non-standard Type (not control or standard or blank) an Type="X"
+    if plate['hasStandard']:
+        data_df.loc[~data_df['Type'].str.match(r"^[BSC][1-9]?$"), 'Type'] = "X"
+    else:
+         data_df.loc[~data_df['Type'].str.match(r"^[BC][12]?$"), 'Type'] = "X"
+ 
+    # hard fix for inconsistency in PDFG-AA / PDGFAA
+    data_df.columns = [col.replace("PDGF-", "PDGF") for col in data_df.columns]
 
     # adjust the Gene headers
-    # get the Plex setup into the col_df and merge with control_df containing the Luminex params
-    col_df = pd.DataFrame(data_df.columns[2:-1]).rename({0:"PlexName"}, axis=1).merge(control_df, how="left")
+    # get the Plex setup into the standard_df and merge with control_df containing the Luminex params
+    standard_df = pd.DataFrame(data_df.columns[2:-1]).rename({0:"PlexName"}, axis=1).merge(control_df, how="left")
     
     # check for consistency in Luminex Params
-    if (len(miss_prots := col_df.loc[col_df['Protein'] != col_df['Protein'], 'PlexName'])):
+    if (len(miss_prots := standard_df.loc[standard_df['Protein'] != standard_df['Protein'], 'PlexName'])):
         miss_list = '; '.join([f'<{prot}>' for prot in miss_prots])
         show_output(f"The following Proteins were not found in the Luminex Params [{miss_list}]", color="warning")
         return
-    
-    cols = col_df.columns
-    col_df['Run'] = run
-    col_df['Plex'] = plex
-    col_df = col_df.loc[:, ['Run', 'Plex'] + list(cols)]
-    
+
     # apply the cleaned gene names to the column names
-    data_df.columns = list(data_df.columns[:2]) + list(col_df['Protein']) + list(data_df.columns[-1:])
-    data_df = data_df.melt(id_vars=['Well', 'Type', 'SamplingErrors'], var_name="Protein", value_name="FI")
-    data_df.loc[:, 'FI'] = data_df['FI'].str.replace(",", ".").str.replace(r"***", "0", regex=False).astype(float)
-    
-    # add info and adjust columns
-    data_cols = list(data_df.columns)
-    # add run as id
-    data_df['Run'] = run
-    data_df['Plex'] = plex
-    raw_data_cols = ['Run','Plex'] + data_cols
-    data_df = data_df.loc[:, raw_data_cols]
-    
-    # detect if standard has been used
-    has_standard = len(data_df['Type'].str.extract(r"^(S[1-8])$").dropna()[0].unique()) == 8
-    header['hasStandard'] = has_standard
-    data_df = data_df.sort_values(['Run','Plex', 'Type', 'Protein', 'Well'])
-    return header, data_df, col_df
+    data_df.columns = list(data_df.columns[:2]) + list(standard_df['Protein']) + list(data_df.columns[-1:])
 
 
-def read_conc_plate(plate, col_df):
+
+    # tidy the data into Well-Type-SamplingErrors
+    raw_df = data_df.melt(id_vars=['Well', 'Type', 'SE'], var_name="Protein", value_name="FI")
+    raw_df.loc[:, 'FI'] = raw_df['FI'].str.replace(",", ".").str.replace(r"***", "0", regex=False).astype(float)
+    # add RunPlexPlate and reorder cols
+    data_cols = list(raw_df.columns)
+    base_cols = ['Run', 'Plex', 'Plate']
+    raw_df.loc[:, base_cols] = list(plate.loc[base_cols])
+    raw_df = raw_df.loc[:, base_cols + data_cols]
+
+    # detect if control has been included
+    plate['hasControl'] = len(raw_df.loc[raw_df['Type'].str.match(r"^C[12]$"), :].index) > 0
+    # detect if there is any data
+    plate['DataWells'] = (has_data := len(data_df.query('Type == "X"')))
+    if not has_data:
+        if config['verbose']:
+            show_output(f"Plate {plate['rawPath']} has no data!", color = "warning")
+
+
+    # has_standard = False
+    if plate['hasStandard']:
+        # add RunPlexPlate and reorder cols
+        # else no output to standard_df is needed
+        standard_cols = list(standard_df.columns)
+        standard_df.loc[:, base_cols] = list(plate.loc[base_cols])
+        standard_df = standard_df.loc[:, base_cols + standard_cols]
+        # calculate the standard fit and add to standard_df
+        standard_df = standard_df.apply(fit_standard_row, data_df=raw_df, axis=1, **config['fitting'])
+        if config['plot_fit']:
+            plot_config = config['plotting']
+            standard_df.apply(plot_fitting, axis=1, **plot_config, verbose=config['verbose'])
+            
+        # extract the data from the standard_df into raw_df
+        raw_df = pd.concat(list(standard_df['data']))
+        standard_df = standard_df.drop(['ss', 'sc', 'data'], axis=1)
+    else:
+        # return no standard_df if there is no standard_data
+        # standard_df = None
+        if config['verbose']:
+            show_output(f"Plate {plate['rawPath']} has no standards!", color = "warning")
+        if has_data:
+            # at least get the data - nothing else to do, already stored in raw_df
+            pass
+        standard_df = pd.DataFrame()
+
+    raw_df = raw_df.sort_values(['Run','Plex', 'Type', 'Protein', 'Well'])
+    
+    return plate, standard_df, raw_df
+
+
+def read_conc_plate(plate, control_df, config={}):
     '''
-    reads from a checkimmune output excel file the computed values --> conc_df
+    reads from a checkimmune output excel file the computed values
+    and adds them to the data_df in the standard_row
     '''
 
     # output empty dataframe with respective columns for compatibility
-    if plate['conc']:
+    conc_file = os.path.join(config['data_path'], plate['concPath'])
+    if conc_file:
         # read the concentration
-        show_output(f"Run {plate['run']} {plate['plex']}: Loading precomputed concentrations from {plate['conc']}")
-        conc_df = pd.read_excel(plate['conc'], skiprows=7, sheet_name="Obs Conc").iloc[1:, :].reset_index(drop=True)
+        show_output(f"Run {plate['Run']} {plate['Plex']} Plate{plate['Plate']}: Loading precomputed concentrations from {plate['concPath']}")
+        conc_df = pd.read_excel(conc_file, skiprows=7, sheet_name="Obs Conc").iloc[1:, :].reset_index(drop=True).rename(
+            {'Unnamed: 0': 'Type', 'Unnamed: 1': 'Well'}, axis=1).dropna(subset="Well")
     else:
-        # return the empty df
-        show_output(f"Run {plate['run']} {plate['plex']}: No concentration file found!", color="warning")
-        return pd.DataFrame(columns=['Run','Plex', 'Protein', 'Well', 'conc'])
-    
-    # apply the cleaned gene names to the column names
-    conc_df.columns = ['Type', 'Well'] + list(col_df['Protein'])
-    # keep only data columns
-    conc_df = conc_df.query('Well == Well')
+        # return an empty df if there is no conc file
+        show_output(f"Run {plate['Run']} {plate['Plex']} Plate{plate['Plate']}: No concentration file found!", color="warning")
+        return pd.DataFrame()
     # remove external standards (eS1...)
     conc_df = conc_df.loc[~(conc_df['Type'].str.match(r"[eE][SC][1-8]")), :].reset_index(drop=True)
-    conc_df = conc_df.melt(id_vars=['Well', 'Type'], var_name="Protein", value_name="conc")
-
-    # add run as id
-    run, plex = plate['run'], plate['plex']
     
-    conc_df = convert2float(conc_df)
+    # pivot the data
+    conc_df = conc_df.melt(id_vars=['Well', 'Type'], var_name="PlexName", value_name="concCI")
+    # adjust the column names from control_df
+    conc_df = conc_df.merge(control_df.loc[:, ['PlexName', 'Protein']]).loc[:, ['Well', 'Protein', 'concCI']]
+    # convert all the marked values to allow float-cast
+    conc_df = convert2float(conc_df, cols=['concCI'])
     org_cols = list(conc_df.columns)
-    conc_df['Run'] = run
-    conc_df['Plex'] = plex
-    conc_cols = ['Run','Plex'] + org_cols
-    conc_df = conc_df.loc[:, conc_cols]
+    base_cols = ['Run', 'Plex', 'Plate']
+    conc_df.loc[:, base_cols] = list(plate.loc[base_cols])
 
-    # sort_values
-    conc_df = conc_df.sort_values(['Run','Plex', 'Protein', 'Well'])
-    return conc_df
+    return conc_df.loc[:, base_cols + org_cols]
 
 
-def fit4protein(data_df, col_df, protein="M-CSF", run="20211021", apply_standard_from_run=0, fig_path="", zero_value=0.1, dilution=4, confidence=0.9, plot=True):
+def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     '''
-    master function for computing and applying fits
-    if fig_path is set, a figure for the standard curve is plotted
-    '''
-
-    # retrieve all the relevant data from the DB
-    ss, sc, sample_df = get_data_types(data_df, col_df, run=run, protein=protein, zero_value=zero_value, dilution=dilution)
-    # load other standard if apply_standard_from_run is set to a value
-    if apply_standard_from_run:
-        ss = get_standard(data_df, col_df, run=apply_standard_from_run, protein=protein, zero_value=zero_value, dilution=dilution)
-
-    # fit the params
-    params, R = fit_standard(ss)
+    read all the luminex data from one folder
     
-    # apply the data point to the col_df if not used from other run
-    if not apply_standard_from_run:
-        col_df.loc[(col_df['Run'] == run) & (col_df['Protein'] == protein), ['params', 'R^2']] = [" | ".join([str(round(p,3)) for p in params]), R]
-
-    # load the values for the controls
-    sc = load_controls(sc, col_df)
-    # get the Cmin and Cmax from the params for sample_df
-    sample_df.loc[:, ["Cmin", "Cmax"]] = get_confidence(params, fraction=confidence)
-    ss.loc[:, ["Cmin", "Cmax"]] = get_confidence(params)
-    sample_df = pd.concat([sample_df, sc, ss])
-    sample_df = compute_samples(sample_df, params)
-    # apply the computed values to the data_df
-    data_df.loc[(data_df['Run'] == run) & (data_df['Protein'] == protein), ['conc', 'Cmin', 'Cmax', 'Coff']]  = np.round(sample_df.loc[:, ['conc', 'Cmin', 'Cmax',  'Coff']],2)
-    # apply the maximum Coff from the standards to the col_df as SCoffMax
-    # this is a measure of the reach of the maximal standard concentrations
-    # SCoffMax < 0.6 mean the sigmoidal curve is largely extrapolated 
-    col_df.loc[(col_df['Run'] == run) & (col_df['Protein'] == protein), "SCoffMax"] = sample_df.loc[sample_df['Type'].str.match(r"[eE]?[S][1-8]"), 'Coff'].max().round(2)
-    col_df.loc[(col_df['Run'] == run) & (col_df['Protein'] == protein), ["C1CoffMean", "C2CoffMean"]] = list(sample_df.loc[sample_df['Type'].str.startswith("C"), :].groupby('Type')['Coff'].mean().round(2))
-    # create the data_dict for export to multiplotting
-    data_dict = dict(
-        Run=run,
-        Protein=protein,
-        data=sample_df,
-        params=params,
-        R=R
-    )
-    
-    if plot:
-        fig, ax = plot_fitting(data_dict)
-        # save output
-        fig.savefig(fig_path)
-        plt.close()
-        show_output(f"Saving fitted data to {'/'.join(fig_path.split('/')[-3:])}")
-    return data_df, col_df, data_dict
-
-
-def fit4all(data_df, col_df, plate_df, output_path=".", zero_value=0.1, dilution=4, confidence=0.9, plot_fit=True, plot_combined_graphs=True, run_colors={}, apply_standard_from_run=0, fig_type="svg"):
-    '''
-    takes care of visualization for all the proteins for all the runs
-    compute the fit and save the standard curves
     '''
     
-    # create figure folder
-    if plot_fit or plot_combined_graphs:
-        fig_base_folder = os.path.join(output_path, "curves")
-        if not os.path.isdir(fig_base_folder):
-            os.makedirs(fig_base_folder)    
-        
-    # init ddld ("data_dict_list_dict")
-    # ddld is the dictionary of genes and the respective lists of data_dicts for multiplotting
-    # will be used afterwards for the plotting function as an iterable
-    ddld= {protein:[] for protein in data_df['Protein'].unique()}
-    for run in (runs:= data_df['Run'].unique()):
-        if plot_fit:
-            fig_folder = os.path.join(fig_base_folder, str(run))
-            if not os.path.isdir(fig_folder):
-                os.makedirs(fig_folder)
-
-        # check if run has standard
-        if plate_df.query('Run == @run')['hasStandard'].any():
-            fallback_run = 0
-            add_string = ""
-        else:
-            # if not use the last run
-            fallback_run = apply_standard_from_run
-            add_string = f" using standards from run {fallback_run}"
-        for protein in data_df.query('Run == @run')['Protein'].unique():
-            show_output(f"Computing params for {protein} in run {run}{add_string}")
-            fig_path = os.path.join(fig_folder, f"{run}_{protein}.{fig_type}") if plot_fit else ""
-            data_df, col_df, data_dict = fit4protein(data_df, col_df, protein=protein, run=run, apply_standard_from_run=fallback_run, fig_path=fig_path, zero_value=zero_value, dilution=dilution, confidence=confidence, plot=plot_fit)
-            # add the gene-run data to the ddld
-            data_dict['color'] = run_color[run]
-            if fallback_run: 
-                data_dict['R'] = f"Standard from {fallback_run} used!"
-            ddld[protein].append(data_dict)
-            
-    # plot the combined plots
-    if plot_combined_graphs:
-        for protein in data_df['Protein'].unique():
-            # check for the runs that actually contain data for this data point
-            fig, ax = plot_multi(ddld[protein], show_info=True)
-            fig_path = os.path.join(fig_base_folder, f"{protein}.{fig_type}")
-            fig.savefig(fig_path)
-            plt.close()
-            
-    return data_df, col_df
-
-
-def read_luminex_folder(data_folder, raw_pattern="Rawdata", conc_pattern="ISA_conc", params_file="", output_path=".", excel_out="luminexel", default_run=20211021, fig_type="svg", plot_fit=True, plot_combined_graphs=True):
-    '''
-    reads all luminex data from one folder
-    '''
-    # !!!!
-    # adjust run colors more dynamically
+    base_cols = ['Run', 'Plex', 'Plate']
+    data_cols = base_cols + ['Well', 'Type', 'Protein']
     
-    run_color={20211021:"green", 20211102:"orange", 20211222:"brown"}
+    
+    # load the config_file and pass extra kwargs
+    config = load_lumi_config(config_file=config_file, analysis_name=analysis_name, **kwargs)
     
     # load in the Luminex params
-    if params_file == "":
+    params_file = config['params_file']
+    if not params_file:
         show_output("You have to provide a Luminex params file [params_file=""]!!! Aborting", color="warning")
         return
+    if not os.path.isfile(params_file):
+        show_output(f"Luminex params file {params_file} cannot be found!!! Aborting", color="warning")
+        return
+    
     control_df = pd.read_excel(params_file, sheet_name="Controls").merge(pd.read_excel(params_file, sheet_name="Proteins").loc[:, ['PlexName', 'Protein']]).loc[:, ['PlexName', 'Protein', 'C1', 'C2', 'S1']]
     
-    # check if excel_file already exists and 
-    if excel_out:
-        excel_file = os.path.join(output_path, f'{excel_out.replace(".xlsx", "").replace("xls", "")}.xlsx')
-        # create has_excel flag for use in plate_list and below for saving to file
-        use_file = excel_file if (has_excel := os.path.isfile(excel_file)) else ""
-    #### file reading
-    plate_list = get_luminex_plates(data_folder, use_file=use_file, raw_pattern=raw_pattern, conc_pattern=conc_pattern)
-    if not(len(plate_list)):
-        show_output(f"No new data found in {data_folder}!", color="warning")
-        if excel_out:
-            return read_luminexcel(excel_file)
-        else:
-            return pd.DataFrame(), pd.DataFrame(),pd.DataFrame()
-    # ######### raw files
+    # create the output file and check for existing
+    excel_file = os.path.join(config['analysis_folder'], f"{analysis_name}_luminexcel.xlsx")
+    # create this empty old_data marker
+    use_old = 0
+    
+    if config['use_file']:
+        old_data = load_existing(config['use_file'])
+        use_old = 1
+    else:
+        if os.path.isfile(excel_file) and config['use_existing']:
+            old_data = load_existing(excel_file)
+            use_old = 2
+
+    # load the plates and remove the duplicates from old runs
+    plate_df = get_luminex_plates(config['data_path'], raw_pattern=config['raw_pattern'])
+    
+    if use_old:
+        # only use the new plates (drop duplicates)
+        old_plates = old_data['Plates'].loc[:, base_cols + ['rawPath', 'concPath']]
+        plate_df = pd.concat([plate_df, old_plates]).drop_duplicates(keep=False).sort_values(base_cols)
+
+        ############ Pseudo-duplicates ##############
+        # this stuff is quite complicated as it allows duplicate data to be created which is kinda hard to solve later
+        # get the count for pseudo_duplicates
+        plate_df.loc[:, ['count']] = plate_df.groupby(base_cols)['rawPath'].transform(lambda x: x.count())
+        # extract the removers_df containing base_cols of pseudoduplicates
+        remover_df = plate_df.loc[plate_df['count'] >1, base_cols].drop_duplicates()
+        old_data['Plates'] = old_data['Plates'].merge(remover_df, how="outer", indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
+        old_data['Standards'] = old_data['Standards'].merge(remover_df, how="outer", indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
+        old_data['tidyData'] = old_data['tidyData'].merge(remover_df, how="outer", indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
+
+        # adjust pseudo_duplicate lines if only one sample has been added (collect data for both entries)
+        plate_df = plate_df.fillna("").groupby(base_cols).agg({'rawPath': max, 'concPath':max}).reset_index()
+
+        if not len(plate_df.index):
+            show_output(f"No new data found in {config['data_path']}. Exiting!", color="success")
+            return old_data['Plates'], old_data['Standards'], old_data['tidyData']
+    ########### READ IN RAW DATA ##############################################
     # load in all the raw_files and store data in dfs
-    col_dfs = []
+    plate_rows = []
+    standard_dfs = []
     data_dfs = []
-    plate_dfs = []
-
-    # cycle through raw files
-    for plate in plate_list:
-        plate_df, data_df, col_df = read_raw_plate(plate, control_df)
-        conc_df = read_conc_plate(plate, col_df)
-        # expand the wells for duplicates
-        conc_df = conc_df.set_index(['Run', 'Plex', 'Protein', 'conc'])['Well'].str.extractall(r"(?P<Well>[A-H][0-9]+)").reset_index().drop('match', axis=1)
-        # merge data_df and conc_df for single output
-        data_df = data_df.merge(conc_df.loc[:, ['Well', 'Protein', 'conc']], how="left", on=['Well', 'Protein'])
-        
-        col_dfs.append(col_df)
-        plate_dfs.append(plate_df)
+    # cycle through files using df.iterrows
+    for _, plate in plate_df.iterrows():
+        if not plate['rawPath']:
+            show_output(f"Run {plate['Run']} {plate['Plex']} Plate{plate['Plate']}: No raw data file detected. Skipping {plate['concPath']}", color="warning")
+            continue
+        plate, standard_df, data_df = read_raw_plate(plate, control_df, config=config)
+        if plate['concPath']:
+            conc_df = read_conc_plate(plate, control_df, config=config)
+            data_df = data_df.merge(conc_df, how="left")
+        plate_rows.append(plate)
+        standard_dfs.append(standard_df)
         data_dfs.append(data_df)
-         
+    
     # combine to dfs
-    plate_df = pd.concat(plate_dfs).sort_values(['Run', 'Plex'])
-    # remove the absolute path from the FolderPath for the raw_plates to keep it compatible to moving the data
-    plate_df.loc[:, 'FolderPath'] = plate_df['FolderPath'].str.replace(f"{data_folder}/", "")
-
-    col_df = pd.concat(col_dfs).sort_values(['Run', 'Plex', 'Protein']).drop_duplicates(['Run', 'Plex', 'Protein'])
+    if len(plate_rows):
+        plate_df = pd.DataFrame(plate_rows)
+    else:
+        show_output(f"No new data found in {config['data_path']}. Exiting!", color="success")
+        if use_old:
+            return old_data['Plates'], old_data['Standards'], old_data['tidyData']
+        # really nothing there
+        else:
+            return [pd.DataFrame()] * 3
+    # maybe no new standard has been added
+    if len(standard_df.index):
+        standard_df = pd.concat(standard_dfs).sort_values(base_cols + ['Protein']).drop_duplicates(base_cols + ['Protein'])
     data_df = pd.concat(data_dfs).sort_values(['Run', 'Plex', 'Protein', 'Type', 'Well']).reset_index(drop=True)
 
-    for df in [col_df, data_df, plate_df]:
-        df.loc[:, 'Run'] = df['Run'].astype(int)
-    
-    data_df.loc[~data_df['Type'].str.match(r"^[SC][1-9]$"), 'Type'] = "X"
-    
-    # assign concentration as coming from CheckImmune as "CI"
-    data_df = data_df.rename({'conc':'conc_CI'}, axis=1)
-    data_df, col_df = fit4all(data_df, col_df, plate_df, output_path=output_path, apply_standard_from_run=default_run, fig_type=fig_type, plot_fit=plot_fit, plot_combined_graphs=plot_combined_graphs)
-    
-           
+  ############ OUTPUT #################################
     # ##### output
-    if excel_out:
-        # check whether the file already exists
-        if has_excel:
+    if config['write_excel']:
+        if use_old:
             # add the new stuff to the old sheets and sort again
-            show_output(f"Adding new data to {excel_file}")
-            plate_df_old, col_df_old, data_df_old = read_luminexcel(excel_file)
-            plate_df = pd.concat([plate_df_old, plate_df]).sort_values(['Run', 'Plex'])
-            col_df = pd.concat([col_df_old, col_df]).sort_values(['Run', 'Plex', 'Protein']).drop_duplicates(['Run', 'Plex', 'Protein'])
-            data_df = pd.concat([data_df_old, data_df]).sort_values(['Run', 'Plex', 'Protein', 'Type', 'Well']).drop_duplicates(['Run', 'Plex', 'Protein', 'Well'])
+            if use_old == 1:
+                show_output(f"Combining preexisting data from {config['use_file']} and new data to {excel_file}")
+            if use_old == 2:
+                show_output(f"Adding new data to {excel_file}")
+            plate_df = pd.concat([old_data['Plates'], plate_df]).sort_values(base_cols)
+            standard_df = pd.concat([old_data['Standards'], standard_df]).sort_values(base_cols + ['Protein']).drop_duplicates()
+            data_df = pd.concat([old_data['tidyData'], data_df]).sort_values(data_cols).drop_duplicates()
         else:
             show_output(f"Writing excel output to {excel_file}")
         with pd.ExcelWriter(excel_file, mode="w") as writer:
             plate_df.to_excel(writer, sheet_name="Plates", index=False)
-            col_df.to_excel(writer, sheet_name="Plexes", index=False)
-            # Cmin and Cmax should be dropped for actual output
-            data_df.to_excel(writer, sheet_name="RawData", index=False)       
-    show_output(f"Finished collecting Luminex data for folder {data_folder}", color="success")
-    return plate_df, col_df, data_df          
+            standard_df.to_excel(writer, sheet_name="Standards", index=False)
+            data_df.to_excel(writer, sheet_name="tidyData", index=False)
+            if config['output_untidy']:
+                for col in ['FI', 'conc', 'concCI', 'Fpos']:
+                    set_cols = ['Run', 'Plex', 'Plate', 'Well', 'Type', 'SE']
+                    pivot_df = data_df.set_index(set_cols).pivot(columns="Protein", values=col).loc[:, list(control_df['Protein'])].dropna(how="all").reset_index(drop=False)
+                    pivot_df.to_excel(writer, sheet_name="Conc", index=False)
+    show_output(f"Finished collecting Luminex data for folder {config['data_path']}", color="success")
+    
+    return plate_df, standard_df, data_df        
 

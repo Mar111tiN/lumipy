@@ -1,0 +1,25 @@
+---
+verbose: False
+plot_fit: True
+write_excel: True
+output_untidy: True
+use_existing: True
+use_file: ""  # this file will be used and only new plates will be added (overrules use_existing)
+raw_pattern: rawdata
+paths: # all paths are absolute paths or relative to base_path or home as default) 
+    base_path: Dropbox/Icke/Work
+    data_path: Luminex/data/LuminexDataAll    
+    output_path: Luminex/output
+    params_file: Luminex/info/LuminexParams.xlsx  # contains all device-specific Plex data
+fitting:
+    dilution: 4        # dilution of the standard dilution series
+    confidence: 0.95    # the range of FI values that are used for Fpos calculation
+plotting:
+    plot_type: pdf
+    plot_folder_name: curves  # images are stored in output_path/<EXP_FOLDER>/<plot_folder_name>
+    zero_value: 0.1     # value used in log-display for blank values (zero does not work)
+    plot_font_size: 20
+    control_color: yellow
+    sample_color: green
+    standard_color: blue
+    show_params: True

@@ -1,5 +1,7 @@
 import os
+from yaml import CLoader as Loader, load
 from datetime import datetime as dt
+
 
 ansii_colors = {
     "magenta": "[1;35;2m",
@@ -29,3 +31,12 @@ def show_output(text, color="normal", multi=False, time=False, **kwargs):
     proc = f"\033{colors['process']}Process {os.getpid()}\033[0m : " if multi else ""
     text = f"\033{colors[color]}{text}\033[0m"
     print(time + proc + text, **kwargs)
+
+
+def load_config(config_file):
+    '''
+    loads a yaml_config
+    '''
+
+    with open(config_file, "r") as stream:
+        return load(stream, Loader=Loader)

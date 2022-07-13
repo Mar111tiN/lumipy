@@ -3,7 +3,57 @@ import re
 import numpy as np
 import pandas as pd
 
-from script_utils import show_output
+from script_utils import show_output, load_config
+
+
+def load_lumi_config(analysis_name="results", config_file="", create_folders = True, **kwargs):
+    '''
+    loads the config from a yaml file and updates with keyword arguments
+    flattens the paths to absolute values
+    sets the experiment folder and creates the folders for it
+    '''
+    
+    config = load_config(config_file)
+    # set the base_path
+    base_path = config['paths']['base_path']
+    config['paths']['base_path'] = base_path if base_path.startswith("/") else os.path.join(os.environ['HOME'], base_path)
+
+    # flatten the paths and add home_path if not abs_path
+    for key, value in config['paths'].items():
+        if not key == "base_path":
+            config[key] = value if value.startswith("/") else os.path.join(config['paths']['base_path'], value)
+    del config['paths']
+    config['analysis_folder'] = os.path.join(config['output_path'], analysis_name)
+    # leave plot_folder as "" if nothing is in there
+    p = config['plotting']['plot_folder_name']
+    config['plotting']['plot_folder'] = os.path.join(config['analysis_folder'], p) if p else ""
+    # load in the kwargs to overwrite
+    config.update(kwargs)
+    # create the folders
+    if create_folders:
+        show_output(f"Creating analysis folder {config['analysis_folder']}")
+        # check for "" and then skip the folder building
+        if config['analysis_folder']:
+            if not os.path.isdir(config['analysis_folder']):
+                os.makedirs(config['analysis_folder'])
+        if (plot_folder := config['plotting']['plot_folder']) and config['plot_fit']:
+            if not os.path.isdir(plot_folder):
+                os.makedirs(plot_folder)
+    return config
+    
+
+def load_existing(luminexcel_file):
+    '''
+    preload an existing file into a data dict
+    '''
+    
+    old_data = {}
+    for sheet in ['Plates', 'Standards', 'tidyData']:
+        df = pd.read_excel(luminexcel_file, sheet_name=sheet)
+        df.loc[:, 'Run'] = df['Run'].astype(str)
+        old_data[sheet] = df
+        
+    return old_data
 
 
 def read_csv_header(csv_file):
@@ -45,38 +95,41 @@ def read_header(file, is_excel=False):
     # wrangle the data and add run and plex from file name
     plate_df = plate_info.rename({
         "Plate ID": "orgPlateID",
-        "File Name": "RawdataPath",
+        "File Name": "sourcePath",
         "Acquisition Date": "AcquisitionTime",
         "Reader Serial Number": "ReaderID", 
         "RP1 PMT (Volts)": "RP1_PMT",
         "RP1 Target": "RP1_Target"
-    }).to_frame().T.reset_index(drop="True")
+    })
     
     return plate_df
 
 def get_run_plex(file):
     '''
-    retrieve run and flex from the file name
+    retrieve run and flex from the file name using regex parts
     '''
-    for s in os.path.basename(file).split("_"):
+    plate = 1
+    for s in os.path.basename(file).split(".")[0].split("_"):
         if re.match(r"[0-9]+-Plex", s):
             plex = s
         elif re.match(r"[0-9]{8}", s):
-                run = s
-    return run, plex
+                run = str(int(s) - 20000000)
+        elif re.match(r"Platte([0-9]+)", s):
+            plate = int(s.replace("Platte", ""))
+    return (run, plex, plate)
 
 
-def isMatch(conc_file, run, plex):
+def isMatch(conc_file, run, plex, plate):
     '''
-    checks if a conc_file fits to a run and plex combo
+    checks if a conc_file fits to a run-plex-plate combo
     '''
     
-    crun, cplex = get_run_plex(conc_file)
+    crun, cplex, cplate = get_run_plex(conc_file)
     
-    return (crun == run) & (cplex == plex)
+    return (crun == run) & (cplex == plex) & (cplate == plate)
 
 
-def get_luminex_plates(data_folder, use_file="", raw_pattern="Rawdata", conc_pattern="ISA_conc"):
+def get_luminex_plates(data_folder, raw_pattern="rawdata", **kwargs):
     '''
     create a data_list containing the raw_data and conc excel files
     for a given folder (recursively)
@@ -94,103 +147,45 @@ def get_luminex_plates(data_folder, use_file="", raw_pattern="Rawdata", conc_pat
     raw_file_list = []
     conc_file_list = []
     
-    # load the existing raw_files:
-    previous_raw_files = list(pd.read_excel(use_file, sheet_name="Plates")['FolderPath']) if use_file else []
-    
+    # programmed to run recursively
     for f in [folder for folder in os.walk(data_folder)]:
         folder = f[0]
-        raw_files = [os.path.join(folder, file) for file in f[2] if raw_pattern in file and not os.path.basename(file).startswith("~$")]
+        # exclude temp files of open excel files
+        raw_files = [os.path.join(folder, file) for file in f[2] if raw_pattern in file.lower() and not os.path.basename(file).startswith("~$")]
         raw_file_list += raw_files
-
-        conc_files = [os.path.join(folder, file) for file in f[2] if conc_pattern in file and not os.path.basename(file).startswith("~$")]
-        conc_file_list += conc_files
         
+        # conc files are defined by not containing the raw_pattern
+        conc_files = [os.path.join(folder, file) for file in f[2] if not raw_pattern in file.lower() and not os.path.basename(file).startswith("~$") and not os.path.basename(file).startswith(".")]
+        conc_file_list += conc_files
     # find the matching conc files
-    plate_list = []
+    plate_list = []                
     for raw_file in raw_file_list:
-        # skip if file has been found in excel_output
-        if (short_file := raw_file.replace(f"{data_folder}/", "")) in previous_raw_files:
-            show_output(f"{short_file} is already included and will be skipped.", color="warning")
-            continue
-        run, plex = get_run_plex(raw_file)
-        conc_files = [f for f in conc_file_list if isMatch(f, run, plex)]
-        conc_file = conc_files[0] if len(conc_files) else None
-        plate_list.append(dict(run=run, plex=plex, raw=raw_file, conc=conc_file))
-    return plate_list
+        short_file = raw_file.replace(f"{data_folder}/", "")
+        run, plex, plate = get_run_plex(raw_file)
+        conc_files = [f for f in conc_file_list if isMatch(f, run, plex, plate)]
+        conc_file = conc_files[0].replace(f"{data_folder}/", "") if len(conc_files) else None
+        plate_list.append(dict(Run=run, Plex=plex, Plate=plate, rawPath=short_file, concPath=conc_file))       
+    # check for isolated conc-files
+    for conc_file in conc_file_list:
+        run, plex, plate = get_run_plex(conc_file)
+        raw_files = [f for f in raw_file_list if isMatch(f, run, plex, plate)]
+        if not len(raw_files):
+            plate_list.append(dict(Run=run, Plex=plex, Plate=plate, rawPath=None, concPath=conc_file.replace(f"{data_folder}/", "")))
+    
+    # convert into df
+    plates_df = pd.DataFrame(plate_list).sort_values(['Run', 'Plex', 'Plate']).reset_index(drop=True)
+    return plates_df
 
 
-def convert2float(df):
+def convert2float(df, cols=['conc']):
 
-    for col in ['conc']:
+    for col in cols:
         df.loc[:, col] = df[col].str.replace("---", "-1")
         df.loc[:, col] = df[col].str.replace(",", ".", regex=False)
         df.loc[:, col] = df[col].str.replace("OOR <", "-2", regex=False).str.replace("OOR >", "-1", regex=False)
         df.loc[:, col] = df[col].str.replace("***", "-3", regex=False).str.replace("*", "", regex=False)
         df.loc[:, col] = df[col].astype(float)
     return df
-
-
-def get_standard(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, zero_value=0.1):
-    '''
-    returns the standard for that run and the respective protein
-    '''
-    
-    # retrieve only the controls from the raw data
-    control_df = data_df.loc[data_df['Type'].fillna("").str.match(r"^[SC][1-9]?"),:]
-    
-    run = int(run)
-    # retrieve standards and control from control_df
-    s = control_df.query('Run == @run and Protein == @protein')
-    if s.empty:
-        show_output(f"No data for Run {run} and Protein {protein}!", color="warning")
-        return
-    ss = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
-    sc = s.loc[s['Type'].str.match("^C[12]$"),:]
-    
-    # get the starting concentration for that dilution
-    conc = col_df.query('Run == @run and Protein == @protein')['S1'].iloc[0]
-    # fill the dilution series with the last being 0
-    ss.loc[:, 'conc'] = conc / np.power(dilution, ss.loc[:, 'Type'].str.extract("S([1-8])", expand=False).astype(int)-1)
-    ss.loc[ss['Type'] == "S8", 'conc'] = zero_value
-    return ss
-
-
-def get_data_types(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, zero_value=0.1):
-    '''
-    returns the standard for that run and the respective gene
-    '''
-    
-    # retrieve only the controls from the raw data
-    run = int(run)
-    s = data_df.query('Run == @run and Protein == @protein')
-    if s.empty:
-        show_output(f"No data for Run {run} and Protein {protein}!", color="warning")
-        return
-    s.loc[:, 'Type'] = s['Type'].fillna("")
-
-    # retrieve standards and control from data_df
-    ss = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
-    sc = s.loc[s['Type'].str.match("^C[12]$"),:]
-    sx = s.loc[~s['Type'].str.match("^[SC][1-8]$"), :]
-    # get the starting concentration for that dilution
-    conc = col_df.query('Run == @run and Protein == @protein')['S1'].iloc[0]
-    # fill the dilution series with the last being 0
-    ss.loc[:, 'conc'] = conc / np.power(dilution, ss['Type'].str.extract("S([1-8])", expand=False).astype(int)-1)
-    ss.loc[ss['Type'] == "S8", 'conc'] = zero_value
-
-    return ss, sc, sx
-
-
-def load_controls(sc, col_df):
-    '''
-    loads the range of known control concentrations
-    and adds as cols Cmean and Cbound (upper lower spread)
-    '''
-    
-    range_df = col_df.merge(sc.loc[:, ['Run', 'Protein']]).drop_duplicates().loc[:, ['C1', 'C2']].T[0].str.extract(r"(?P<Cmin>[0-9]+) ?[-–] ?(?P<Cmax>[0-9]+)").astype(int)
-    # after the first round, Cmin and Cmax will have been added and need to be remove lest (Cmin_x, Cmin_y) be created
-    sc = sc.drop(['Cmin', 'Cmax'], axis=1, errors="ignore").merge(range_df.loc[:, ['Cmin', 'Cmax']], left_on="Type", right_index=True)
-    return sc
 
 
 def get_params_from_string(string):
@@ -212,17 +207,6 @@ def get_params_from_string(string):
         A,B,_,_,C,D,E = nums
     return [A,B,C,D,E]
 
-
-def get_params_from_col_df(col_df, run="", protein=""):
-    '''
-    retrieves the params (5PL and R) from the col_df
-    '''
-    run = int(run)
-    params, R = col_df.query("Run == @run and Protein == @protein").iloc[0].fillna("").loc[['params','R^2']]
-    params = [float(p) for p in params.split(" | ")] if params else []
-    if not R:
-        R = "No standard used!"
-    return params,R
     
 
 def get_data_dict(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, zero_value=0.1):
