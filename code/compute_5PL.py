@@ -57,7 +57,7 @@ def fit_standard(s):
 
 
 
-def compute_conc(df, standard_row, conc_col="conc"):
+def compute_conc(df, standard_row, conc_col_suff=""):
     '''
     calculate the expected controls/samples from 5PL fit and compare to bounds from
     luminex params
@@ -67,12 +67,15 @@ def compute_conc(df, standard_row, conc_col="conc"):
 
 
     MINVALUE=0.01
+
+    conc_col = "conc" + conc_col_suff
+    Fpos_col = "Fpos" + conc_col_suff
     # extract the params from the standard_row params string
     params = [float(p) for p in standard_row['params'].split(" | ")]
     df.loc[:, conc_col] = retro_5PL(df['FI'], params)
     # extract Fmin and Fmax
     Fmin, Fmax = standard_row.loc[['Fmin', 'Fmax']]
-    df.loc[:, 'Fpos'] = (df['FI'] - Fmin) / (Fmax - Fmin)
+    df.loc[:, Fpos_col] = np.round((df['FI'] - Fmin) / (Fmax - Fmin),3)
     # upgrade 0 values to 0.001
     df.loc[df[conc_col] == 0, conc_col] = MINVALUE
     # distances in the C space should be log-linear
@@ -132,7 +135,7 @@ def analyse_standard(standard_row, s, dilution=4, confidence=0.9, **kwargs):
     standard_row = pd.concat([standard_row, fit_series, conf_series])
 
     # compute the fit concentrations
-    ss = compute_conc(ss, standard_row, conc_col="concFit")
+    ss = compute_conc(ss, standard_row)
     # compute StMax as maximum Fpos in the standard dilution series
     # this is a measure of the reach of the maximal standard concentrations
     # StMax < 0.6 mean the sigmoidal curve is largely extrapolated 
@@ -174,3 +177,38 @@ def analyse_control(standard_row, s):
     # load control_df (sc) into standard_row
     standard_row['sc'] = sc
     return standard_row
+
+
+def compute_external_fit(standard_row, df=pd.DataFrame()):
+    '''
+    for all samples, goes through the standard rows and applies where applicable
+    '''
+    
+    # extract run and protein for df extraction
+    run, protein = standard_row.loc[['Run', 'Protein']]
+    cols = [f"conc{run}", f"Fpos{run}"]
+    
+    df.loc[df['Protein'] == protein, cols] = compute_conc(df.loc[df['Protein'] == protein, :], standard_row, conc_col_suff = run).loc[:, cols]
+    return df
+
+
+def mean_row(row, standard_df=pd.DataFrame(), minFpos=0):
+    '''
+    get the mean of all these runs and standards
+    '''
+    conc = []
+    Fpos = [] 
+    for run in standard_df['Run'].unique():
+        ccol = f"conc{run}"
+        fcol = f"Fpos{run}"  
+        if row[fcol] == row[fcol]:
+            Fpos.append(row[fcol])
+        if row[fcol] > minFpos:
+            conc.append(row[ccol])
+    if (l := len(conc)):
+        return pd.Series(
+            dict(
+                concMean=sum(conc) / len(conc),
+                concStd=np.std(conc),
+                FposMean=sum(Fpos) / len(Fpos)             
+                ))

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 from script_utils import show_output
 from lumipy_utils import *
-from compute_5PL import compute_conc, analyse_control, analyse_standard
+from compute_5PL import *
 from plot_fit import plot_fitting, plot_multi
 
 
@@ -28,6 +28,22 @@ def fit_standard_row(standard_row, data_df=pd.DataFrame(), **fit_config):
     standard_row['data'] = compute_conc(sx, standard_row)
     
     return standard_row
+
+
+def apply_external_standards(data_df, standard_df, fit_config):
+    '''
+    computes concentrations for all samples for all available standards
+    '''
+    
+    data_cols = list(data_df.columns)
+    
+    for _, standard_row in standard_df.iterrows():
+        data_df = compute_external_fit(standard_row, df=data_df)
+    
+    # now get the summary statistics
+    sum_cols = ['concMean', 'concStd', 'FposMean']
+    data_df.loc[:, sum_cols] = data_df.apply(mean_row, standard_df=standard_df, axis=1, minFpos=fit_config['minFpos'])
+    return data_df
 
 
 def read_raw_plate(plate, control_df, config={}):
@@ -178,8 +194,10 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     
     
     # load the config_file and pass extra kwargs
+    show_output(f"Loading Luminex configs from {config_file}.")
     config = load_lumi_config(config_file=config_file, analysis_name=analysis_name, **kwargs)
-    
+
+    show_output(f"Starting analysis of Luminex data folder {config['data_path']}.", color="success")
     # load in the Luminex params
     params_file = config['params_file']
     if not params_file:
@@ -192,7 +210,8 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     control_df = pd.read_excel(params_file, sheet_name="Controls").merge(pd.read_excel(params_file, sheet_name="Proteins").loc[:, ['PlexName', 'Protein']]).loc[:, ['PlexName', 'Protein', 'C1', 'C2', 'S1']]
     
     # create the output file and check for existing
-    excel_file = os.path.join(config['analysis_folder'], f"{analysis_name}_luminexcel.xlsx")
+    excel_file = f"{analysis_name}_luminexcel.xlsx"
+    csv_file = f"{analysis_name}_luminextern.csv.gz"
     # create this empty old_data marker
     use_old = 0
     
@@ -261,7 +280,16 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
         standard_df = pd.concat(standard_dfs).sort_values(base_cols + ['Protein']).drop_duplicates(base_cols + ['Protein'])
     data_df = pd.concat(data_dfs).sort_values(['Run', 'Plex', 'Protein', 'Type', 'Well']).reset_index(drop=True)
 
-  ############ OUTPUT #################################
+
+    ############ ADD EXTERNAL STANDARDS  ################################
+    show_output("Computing concentrations from external standards")
+    data_cols = list(data_df.columns)
+    sum_cols = ['concMean', 'concStd', 'FposMean']
+    data_df = apply_external_standards(data_df, standard_df, config['fitting'])
+    # reduce the data_df to fewer output
+    data_full = data_df.copy()
+    data_df = data_df.loc[:, data_cols + sum_cols]
+    ############ OUTPUT #################################################
     # ##### output
     if config['write_excel']:
         if use_old:
@@ -283,8 +311,8 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
                 for col in ['FI', 'conc', 'concCI', 'Fpos']:
                     set_cols = ['Run', 'Plex', 'Plate', 'Well', 'Type', 'SE']
                     pivot_df = data_df.set_index(set_cols).pivot(columns="Protein", values=col).loc[:, list(control_df['Protein'])].dropna(how="all").reset_index(drop=False)
-                    pivot_df.to_excel(writer, sheet_name="Conc", index=False)
+                    pivot_df.to_excel(writer, sheet_name=col, index=False)
+    show_output(f"Writing complete external conc file output to {excel_file}")
+    data_full.to_csv(csv_file, index=False, sep="\t", compression="gzip")
     show_output(f"Finished collecting Luminex data for folder {config['data_path']}", color="success")
-    
     return plate_df, standard_df, data_df        
-

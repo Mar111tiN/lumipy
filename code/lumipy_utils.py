@@ -31,10 +31,10 @@ def load_lumi_config(analysis_name="results", config_file="", create_folders = T
     config.update(kwargs)
     # create the folders
     if create_folders:
-        show_output(f"Creating analysis folder {config['analysis_folder']}")
         # check for "" and then skip the folder building
         if config['analysis_folder']:
             if not os.path.isdir(config['analysis_folder']):
+                show_output(f"Creating analysis folder {config['analysis_folder']}")
                 os.makedirs(config['analysis_folder'])
         if (plot_folder := config['plotting']['plot_folder']) and config['plot_fit']:
             if not os.path.isdir(plot_folder):
@@ -207,29 +207,6 @@ def get_params_from_string(string):
         A,B,_,_,C,D,E = nums
     return [A,B,C,D,E]
 
-    
-
-def get_data_dict(data_df, col_df, run="20211021", protein='M-CSF', dilution=4, zero_value=0.1):
-    '''
-    provides all the data needed for multi_plotting
-    '''
-    
-    # get the data
-    s, c, x = get_data_types(data_df, col_df, run=run, protein=protein, dilution=dilution, zero_value=zero_value)
-    
-    # get the params from col_df
-    params, R = get_params_from_col_df(col_df, run=run, protein=protein)
-    # store in dictionary
-    data_dict = dict(
-        Run=run,
-        Protein=protein,
-        st=s,
-        ctrl=c,
-        data=x,
-        params=params,
-        R=R
-    )
-    return data_dict
 
 
 def read_luminexcel(excel_path):

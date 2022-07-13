@@ -14,6 +14,7 @@ paths: # all paths are absolute paths or relative to base_path or home as defaul
 fitting:
     dilution: 4        # dilution of the standard dilution series
     confidence: 0.95    # the range of FI values that are used for Fpos calculation
+    minFpos: 0      # for external standards, exclude conc with Fpos < minFpos 
 plotting:
     plot_type: pdf
     plot_folder_name: curves  # images are stored in output_path/<EXP_FOLDER>/<plot_folder_name>
