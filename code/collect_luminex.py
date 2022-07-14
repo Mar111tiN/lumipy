@@ -34,9 +34,7 @@ def apply_external_standards(data_df, standard_df, fit_config):
     '''
     computes concentrations for all samples for all available standards
     '''
-    
-    data_cols = list(data_df.columns)
-    
+
     for _, standard_row in standard_df.iterrows():
         data_df = compute_external_fit(standard_row, df=data_df)
     
@@ -44,6 +42,23 @@ def apply_external_standards(data_df, standard_df, fit_config):
     sum_cols = ['concMean', 'concStd', 'FposMean']
     data_df.loc[:, sum_cols] = data_df.apply(mean_row, standard_df=standard_df, axis=1, minFpos=fit_config['minFpos'])
     return data_df
+
+
+def make_protein_summary(data_df, minFpos=0.1, minFI=2000):
+    '''
+    creates summary statistics for proteins
+    '''
+
+    sum_df = data_df.groupby("Protein", as_index=False).agg(
+        FposMean=pd.NamedAgg("Fpos", "mean"),
+        goodFposfrac=pd.NamedAgg("Fpos", lambda prot: np.sum(prot > minFpos) / len(prot)),
+        FIMean=pd.NamedAgg("FI", "mean"),
+        goodFIfrac=pd.NamedAgg("FI", lambda prot: np.sum(prot > minFI) / len(prot)),
+        FposExtMean=pd.NamedAgg("FposMean", "mean"),
+        goodFposExtfrac=pd.NamedAgg("FposMean", lambda prot: np.sum(prot > minFpos) / len(prot))
+    )
+
+    return sum_df
 
 
 def read_raw_plate(plate, control_df, config={}):
@@ -210,14 +225,18 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     control_df = pd.read_excel(params_file, sheet_name="Controls").merge(pd.read_excel(params_file, sheet_name="Proteins").loc[:, ['PlexName', 'Protein']]).loc[:, ['PlexName', 'Protein', 'C1', 'C2', 'S1']]
     
     # create the output file and check for existing
-    excel_file = f"{analysis_name}_luminexcel.xlsx"
-    csv_file = f"{analysis_name}_luminextern.csv.gz"
+    excel_file = os.path.join(config['analysis_folder'], "luminexcel.xlsx")
+    csv_file = os.path.join(config['analysis_folder'], "luminextern.csv.gz")
     # create this empty old_data marker
     use_old = 0
     
-    if config['use_file']:
-        old_data = load_existing(config['use_file'])
-        use_old = 1
+    if (old_file :=config['use_file']):
+        if os.path.isfile(old_file):
+            old_data = load_existing(old_file)
+            use_old = 1
+        else:
+            show_output(f"{old_file} for appending new data cannot be found! Please check!", color="warning")
+            return
     else:
         if os.path.isfile(excel_file) and config['use_existing']:
             old_data = load_existing(excel_file)
@@ -246,7 +265,10 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
 
         if not len(plate_df.index):
             show_output(f"No new data found in {config['data_path']}. Exiting!", color="success")
-            return old_data['Plates'], old_data['Standards'], old_data['tidyData']
+            # only recompute the protein stats in case something has been added in code
+            sum_df = make_protein_summary(old_data['tidyData'], **config['summary'])
+            return old_data['Plates'], old_data['Standards'], sum_df, old_data['tidyData']
+
     ########### READ IN RAW DATA ##############################################
     # load in all the raw_files and store data in dfs
     plate_rows = []
@@ -271,10 +293,11 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     else:
         show_output(f"No new data found in {config['data_path']}. Exiting!", color="success")
         if use_old:
-            return old_data['Plates'], old_data['Standards'], old_data['tidyData']
+            print("HELLO")
+            return old_data['Plates'], old_data['Standards'], old_data['ProteinStats'], old_data['tidyData']
         # really nothing there
         else:
-            return [pd.DataFrame()] * 3
+            return [pd.DataFrame()] * 4
     # maybe no new standard has been added
     if len(standard_df.index):
         standard_df = pd.concat(standard_dfs).sort_values(base_cols + ['Protein']).drop_duplicates(base_cols + ['Protein'])
@@ -289,6 +312,7 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     # reduce the data_df to fewer output
     data_full = data_df.copy()
     data_df = data_df.loc[:, data_cols + sum_cols]
+
     ############ OUTPUT #################################################
     # ##### output
     if config['write_excel']:
@@ -303,16 +327,22 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
             data_df = pd.concat([old_data['tidyData'], data_df]).sort_values(data_cols).drop_duplicates()
         else:
             show_output(f"Writing excel output to {excel_file}")
+
+        ############ PROTEIN SUMMARY ################
+        # protein summary should be performed on combined data
+        sum_df = make_protein_summary(data_df, **config['summary'])
+
         with pd.ExcelWriter(excel_file, mode="w") as writer:
             plate_df.to_excel(writer, sheet_name="Plates", index=False)
             standard_df.to_excel(writer, sheet_name="Standards", index=False)
+            sum_df.to_excel(writer, sheet_name="ProteinStats", index=False)
             data_df.to_excel(writer, sheet_name="tidyData", index=False)
             if config['output_untidy']:
                 for col in ['FI', 'conc', 'concCI', 'Fpos']:
                     set_cols = ['Run', 'Plex', 'Plate', 'Well', 'Type', 'SE']
                     pivot_df = data_df.set_index(set_cols).pivot(columns="Protein", values=col).loc[:, list(control_df['Protein'])].dropna(how="all").reset_index(drop=False)
                     pivot_df.to_excel(writer, sheet_name=col, index=False)
-    show_output(f"Writing complete external conc file output to {excel_file}")
+    show_output(f"Writing complete external conc file output to {csv_file}")
     data_full.to_csv(csv_file, index=False, sep="\t", compression="gzip")
     show_output(f"Finished collecting Luminex data for folder {config['data_path']}", color="success")
-    return plate_df, standard_df, data_df        
+    return plate_df, standard_df, sum_df, data_df        

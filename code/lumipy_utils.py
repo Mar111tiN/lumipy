@@ -18,14 +18,15 @@ def load_lumi_config(analysis_name="results", config_file="", create_folders = T
     base_path = config['paths']['base_path']
     config['paths']['base_path'] = base_path if base_path.startswith("/") else os.path.join(os.environ['HOME'], base_path)
 
-    # flatten the paths and add home_path if not abs_path
+    # flatten the paths and add base_path if not abs_path
     for key, value in config['paths'].items():
         if not key == "base_path":
             config[key] = value if value.startswith("/") else os.path.join(config['paths']['base_path'], value)
     del config['paths']
     config['analysis_folder'] = os.path.join(config['output_path'], analysis_name)
-    # leave plot_folder as "" if nothing is in there
+    # create plotting folder
     p = config['plotting']['plot_folder_name']
+    # leave plot_folder as "" if nothing is in there
     config['plotting']['plot_folder'] = os.path.join(config['analysis_folder'], p) if p else ""
     # load in the kwargs to overwrite
     config.update(kwargs)
@@ -48,9 +49,10 @@ def load_existing(luminexcel_file):
     '''
     
     old_data = {}
-    for sheet in ['Plates', 'Standards', 'tidyData']:
+    for sheet in ['Plates', 'Standards', 'ProteinStats', 'tidyData']:
         df = pd.read_excel(luminexcel_file, sheet_name=sheet)
-        df.loc[:, 'Run'] = df['Run'].astype(str)
+        if "Run" in df.columns:
+            df.loc[:, 'Run'] = df['Run'].astype(str)
         old_data[sheet] = df
         
     return old_data

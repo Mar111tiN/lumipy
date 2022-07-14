@@ -198,11 +198,14 @@ def mean_row(row, standard_df=pd.DataFrame(), minFpos=0):
     '''
     conc = []
     Fpos = [] 
+    # cycle through conc and Fpos for all standard_runs
     for run in standard_df['Run'].unique():
         ccol = f"conc{run}"
-        fcol = f"Fpos{run}"  
+        fcol = f"Fpos{run}"
+        # only append Fpos if not NaN
         if row[fcol] == row[fcol]:
             Fpos.append(row[fcol])
+        # only append conc if Fpos > minFpos
         if row[fcol] > minFpos:
             conc.append(row[ccol])
     if (l := len(conc)):
