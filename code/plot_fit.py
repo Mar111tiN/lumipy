@@ -1,105 +1,300 @@
 import os
-import pandas as pd
+import random as rnd
 import matplotlib.pyplot as plt
-import seaborn as sn
+import seaborn
 import numpy as np
-sn.set()
+from matplotlib.patches import Rectangle as Rect
+import matplotlib as mpl
+seaborn.set()
 
 from compute_5PL import r_squared, PL5
 from script_utils import show_output
 
-def fit_curve(params, zero_value=0.1, ymax=100000):
+def r(normalize=True):
+    return round(rnd.randint(0,255) / 255, 3) if normalize else rnd.randint(0,255)
+
+
+def random_color(alpha=None, normalize=True):
+    '''
+    create a random color with a given 
+    '''
+    
+    color = (r(normalize), r(normalize), r(normalize))
+    return color + (alpha,) if alpha else color
+
+
+def fit_curve(params, plot_zero=0.1, ymax=100000):
     '''
     returns the fit curve for plotting
     '''
 
-    conc = np.power(10, np.linspace(np.log10(zero_value), np.log10(ymax*1.2)+1, 10000))
+    conc = np.power(10, np.linspace(np.log10(plot_zero), np.log10(ymax*1.2)+1, 10000))
     fit = PL5(conc, params)
     return conc, fit
     
 
-def plot_standard(ax, st_df, params, color="blue", ymax=10000, zero_value=0.1, **kwargs):
+def plot_standard(
+    ax, standard_row,
+    s=50,
+    ymax=10000, 
+    plot_zero=0.1, 
+    **kwargs
+    ):
+    '''
+    subplot the standard curve
+    colors are passed through
+    '''
+
+
+    # extract data from standard_row
+    params, ss = list(standard_row.loc[['params', 'ss']])
+    params = [float(p) for p in params.split(" | ")]
+    # adjust the zero_value
+    ss.loc[ss['conc'] < plot_zero, 'conc'] = plot_zero
+
+    # fit the curve
+    conc, fit = fit_curve(params, plot_zero=plot_zero, ymax=ymax)
+    _ = ax.scatter(conc, fit, s=.1, alpha=0.5, **kwargs)
+    _ = ax.scatter(ss['conc'], ss['FI'],  s=s, **kwargs)
+    # return maximum y value
+    return ss['FI'].max(), ss['conc'].max()
+
+
+def plot_controls(ax, standard_row, 
+    s=150,
+    lw=5,
+    **kwargs
+    ):
+    '''
+    subplot the standard curve
+    color in kwargs
+    '''
+    sc = standard_row['sc']
+    if len(sc):
+        # fit the curve
+        for i in range(len(sc)):
+            _ = ax.plot(sc.loc[:,['Cmin', 'Cmax']].iloc[i], sc.loc[:,['FI', 'FI']].iloc[i],
+                lw=lw,
+                **kwargs
+            )
+        for c in ['Cmin', 'Cmax']:
+            _ = ax.scatter(sc[c], sc['FI'], 
+            s=s, 
+            **kwargs
+            ) #  - np.abs(data_df['Coff']) * 74)
+        return sc['FI'].max(), sc['conc'].max()
+    return 0, 0
+
+
+def plot_values(ax, standard_row,
+        sample_point_size=80,
+        sample_marker="o",
+        plot_zero=0.1,
+        sample_color="green",
+        sample_alpha=1,
+        sample_off_marker="x",
+        sample_off_size=50,
+        sample_off_color="gray",
+        sample_off_alpha=0.8,
+        **kwargs
+        ):
     '''
     subplot the standard curve
     '''
-    
-    # fit the curve
-    conc, fit = fit_curve(params, zero_value=zero_value, ymax=ymax)
-    _ = ax.scatter(conc, fit, color=color, s=.1, alpha=0.5)
-    _ = ax.scatter(st_df['conc'], st_df['FI'], color=color, **kwargs)
+
+    data_df, Fmin, Fmax = list(standard_row.loc[['data', 'Fmin', 'Fmax']])
+    if len(data_df):
+        in_range = (data_df['FI']>= Fmin) & (data_df['FI']<= Fmax)
+        out_off_range = ~in_range & (data_df['conc'] > plot_zero)
+        # plot all computed values 
+        _ = ax.scatter(data_df.loc[in_range, 'conc'], data_df.loc[in_range, 'FI'], 
+            marker=sample_marker,
+            fc='none',
+            color=sample_color,
+            s=sample_point_size,
+            alpha=sample_alpha,
+            )
+        _ = ax.scatter(data_df.loc[out_off_range, 'conc'], data_df.loc[out_off_range, 'FI'], 
+            marker=sample_off_marker, 
+            color=sample_off_color,
+            s=sample_off_size,
+            alpha=sample_off_alpha,
+            )
+        # return maximum y value
+        return data_df['FI'].max(), data_df['conc'].max()
+    return 0, 0
 
 
-def plot_controls(ax, data_df, **kwargs):
+def plot_external(
+        ax, prot_standard, data_full_df,
+        protein="ABC",
+        external_point_size=5,
+        external_marker=".",
+        plot_zero=0.1,
+        external_color="purple",
+        external_alpha=1,
+        external_connect_lw=1,
+        external_connect_alpha=0.3,
+        sample_off_marker="x",
+        sample_off_size=50,
+        sample_off_color="gray",
+        sample_off_alpha=0.8,
+        **kwargs
+    ):
     '''
-    subplot the standard curve
+    print all other values that have been extrapolated
     '''
-    
-    # fit the curve
-    _ = ax.scatter(data_df['Cmin'], data_df['FI'], **kwargs, s=150) #  - np.abs(data_df['Coff']) * 74)
-    _ = ax.scatter(data_df['Cmax'], data_df['FI'], **kwargs, s=150) #  - np.abs(data_df['Coff']) * 74)
+
+    # get the data from standard_df and data_full_df
+    # get the common Fmin and Fmax
+    Fmin = prot_standard['Fmin'].max()
+    Fmax = prot_standard['Fmax'].min()
+    prot_df = data_full_df.query('Protein == @protein and conc != conc')
+
+    if len(prot_df):
+        in_range = (prot_df['FI']>= Fmin) & (prot_df['FI']<= Fmax)
+        out_off_range = ~in_range & (prot_df['concMean'] > plot_zero)
+        
+        _ = ax.scatter(prot_df.loc[in_range, 'concMean'], prot_df.loc[in_range, 'FI'], 
+            marker=external_marker,
+            fc=external_color,
+            color=external_color,
+            s=external_point_size,
+            alpha=external_alpha,
+            )
+        _ = ax.scatter(prot_df.loc[out_off_range, 'concMean'], prot_df.loc[out_off_range, 'FI'], 
+            marker=sample_off_marker, 
+            color=sample_off_color,
+            s=sample_off_size,
+            alpha=sample_off_alpha,
+            )
+            # return maximum y value
+
+        # plot the connecting lines
+        conc_cols = [f"conc{run}" for run in prot_standard['Run'].unique()]
+        # reduce the inrange data to applicable concentrations and get min and max values
+        # FI  min  max
+        line_df = prot_df.loc[in_range, ['FI'] + conc_cols].set_index('FI').agg(
+            ["min", "max"], axis=1
+            ).reset_index()
+        for i, row in line_df.iterrows():
+            _ = ax.plot([row['min'], row['max']], [row['FI'], row['FI']],
+            lw=external_connect_lw,
+            alpha=external_connect_alpha,
+            color=external_color
+            )
+
+        return prot_df['FI'].max(), prot_df['concMean'].max()
+    return 0, 0
 
 
-def plot_values(ax, data_df, **kwargs):
+def plot_confidence_rect(ax, standard_row, conf_rect_color=[0.701, 0.764, 0.858], conf_rect_alpha=0.5, **kwargs):
     '''
-    subplot the standard curve
+    plots the confidence interval for a given standard_row
     '''
-    
-    # fit the curve
-    _ = ax.scatter(data_df['conc'], data_df['FI'], **kwargs)
 
+    # extract the needed params
+    Fmin, Fmax,Cmin, Cmax = list(standard_row.loc[['Fmin', 'Fmax', 'ConcMin', 'ConcMax']])
+    fc = tuple(conf_rect_color) + (conf_rect_alpha,)
+    confidence_rect = Rect((Cmin, Fmin), Cmax-Cmin, Fmax-Fmin, fc=fc)
+    ax.add_patch(confidence_rect)
     
-def plot_fitting(standard_row, zero_value=0.1, plot_folder="", 
-                 show_params=True, 
-                 plot_type='pdf',
-                 plot_font_size=20, 
-                 control_color="yellow",
-                 sample_color="green",
-                 standard_color="blue",
-                 verbose=True,
-                 **kwargs
-                ):
+
+def plot_info(
+    ax, standard_row, 
+    show_fit_params=False,
+    plot_zero=0.1,
+    ypos=5000,
+    info_font_size=30,
+    info_font_color="darkgray",
+    **kwargs
+    ):
+    '''
+    plot the significant values for the 
+    '''
+    
+    xpos = plot_zero * 2
+    # extract the required data fields
+    params, R, StQ, C1fit, C2fit = list(standard_row.loc[['params', 'R^2', 'StMax', 'C1fit', 'C2fit']])
+    params = [float(p) for p in params.split(" | ")]
+
+    # either show params or info field
+    if show_fit_params:
+        for i,p in enumerate("ABCDE"):
+            _ = ax.text(xpos,ypos - i*ypos/10, f"{p}: {round(params[i],3)}", size=info_font_size, color=info_font_color)
+    else:
+        #### show other marker
+        for i, p in enumerate({'R':R, 'StQ':StQ, 'C1fit': C1fit, 'C2fit': C2fit}.items()):
+            _ = ax.text(xpos,ypos - i*ypos/10, f"{p[0]}: {round(p[1],5)}", size=info_font_size, color=info_font_color)
+
+
+def plot_fitting(
+    standard_row,
+    plot_confidence=True,
+    control_color="yellow",
+    control_lw=5,
+    sc_point_size=150,
+    standard_color="blue",
+    ss_point_size=50,
+    plot_zero=0.1, 
+    plot_folder="",
+    plot_type='pdf',
+    plot_font_size=20,
+    verbose=True,
+    **kwargs
+    ):
     '''
     calculate samples for a given standard_row (containing all pertaining data sets as ['ss', 'sc', 'data'])
     '''
     
-    # extract the data fields
-    params, R, st_df, control_df, sample_df = list(standard_row.loc[['params', 'R^2', 'ss', 'sc', 'data']])
-    params = [float(p) for p in params.split(" | ")]
-    # adjust the zero_value
-    st_df.loc[st_df['conc'] == 0, 'conc'] = zero_value
     fig, ax = plt.subplots(figsize=(12,12))
     
-    # calculate R if R is not given
-    if not R:
-        R = r_squared(params, st_df)
+    if plot_confidence:
+        plot_confidence_rect(ax, standard_row, **kwargs)
 
-    ymax = st_df['FI'].max()
+    ymax, xmax = 0, 0
+    ymax_control, xmax_control = plot_controls(
+        ax, standard_row, 
+        s=sc_point_size, 
+        lw=control_lw, 
+        color=control_color
+        )
+    ymax = max(ymax, ymax_control)
+    xmax = max(xmax, xmax_control)
     
-    if not sample_df.empty:
-        plot_values(ax, sample_df, color=sample_color, s=60, alpha=0.8, marker="x")
-        ymax = max(ymax, sample_df['FI'].max())
-
-    if not control_df.empty:
-        plot_controls(ax, control_df, color=control_color)
-        ymax = max(ymax, control_df['FI'].max())
-
-    plot_standard(ax, st_df, params, color=standard_color, s=50)
-    # plots the params info
-
-    x_pos = st_df['conc'].min()
-    if show_params:
-        for i,p in enumerate("ABCDE"):
-            _ = ax.text(x_pos,ymax - i*ymax/10, f"{p}: {round(params[i],3)}", size=30, color="darkgray")
+    ymax_standards, xmax_standards = plot_standard(
+        ax, standard_row, 
+        color=standard_color, 
+        s=ss_point_size
+        )
+    ymax = max(ymax, ymax_standards)
+    xmax = max(xmax, xmax_standards)
     
+    ymax_samples, xmax_samples = plot_values(
+        ax, standard_row, 
+        **kwargs
+        )
+    ymax = max(ymax, ymax_samples)
+    xmax = max(xmax, xmax_samples)
+    
+    plot_info(
+        ax, standard_row,
+        ypos=ymax-500,
+        plot_zero=plot_zero,
+        **kwargs
+        )
+
     # other settings for plot
     _ = ax.set_ylim(-200,ymax*1.2)
+    _ = ax.set_xlim(plot_zero - 0.01, xmax * 3)
     _ = ax.set_xscale('log')
-    _ = ax.set_xlabel('conc', fontsize=plot_font_size)
+    _ = ax.set_xlabel('conc [pg/ml]', fontsize=plot_font_size)
     _ = ax.set_ylabel('FI', fontsize=plot_font_size)
+    _ = ax.get_xaxis().set_major_formatter(mpl.ticker.ScalarFormatter())
     _ = plt.xticks(fontsize=plot_font_size)
     _ = plt.yticks(fontsize=plot_font_size)
 
-    plt.title(f"{standard_row['Protein']} | {standard_row['Run']} | R={round(R,5)} | StQ={standard_row['StMax']}", fontsize=plot_font_size*1.2)
+    plt.title(f"{standard_row['Protein']} | {standard_row['Run']}", fontsize=plot_font_size*1.5)
 
     if plot_folder:
         # set (and create if neccessary) the fig_plot_path ( = plot_folder/Run) 
@@ -107,67 +302,7 @@ def plot_fitting(standard_row, zero_value=0.1, plot_folder="",
             os.makedirs(fig_plot_path)
         fig_file_path = os.path.join(fig_plot_path, f"{standard_row['Protein']}.{plot_type}")
         fig.savefig(fig_file_path)
-        plt.close()
+        # plt.close()
         if verbose:
             show_output(f"Saving fitted data to {'/'.join(fig_file_path.split('/')[-3:])}")
-    return fig, ax
-
-
-
-def plot_multi(data_dict_list=[dict(
-        Run="",
-        Gene="",
-        data=pd.DataFrame(),
-        params=[],
-        R=0,
-        color="black"
-    )], zero_value=0.1,
-        show_info=True
-              ):
-    '''
-    calculate samples for a given set of data_dictionaries
-    '''
-
-    
-    # init the plot
-    fig, ax = plt.subplots(figsize=(12,12))
-    # init ymax and xpos and i for text info
-    ymax,x_pos,i = (0,np.Inf,0)
-
-    for data_dict in data_dict_list:
-        s = data_dict['data']
-        # extract the control, standard and samples from the data_df
-        st_df = s.loc[s['Type'].str.match(r"^S[1-8]$"),:]
-        sample_df = s.loc[~s['Type'].str.match("^[SC][1-8]$"), :]
-        control_df = s.loc[s['Type'].str.match("^[C][12]$"), :]
-        if not sample_df.empty:
-            plot_values(ax, sample_df, color=data_dict['color'], s=80, alpha=0.8, marker="x")
-            ymax = max(ymax, sample_df['FI'].max())
-        if not control_df.empty:
-            plot_values(ax, control_df, color="yellow", s=150)
-            ymax = max(ymax, control_df['FI'].max())
-        if not st_df.empty:
-            plot_standard(ax, st_df, data_dict['params'], color=data_dict['color'], s=50)
-            ymax = max(ymax, st_df['FI'].max())
-            # plots the params info
-        x_pos = min(x_pos, st_df['conc'].min())
-
-    # add this list only after ymax has been determined
-    if show_info:
-        for data_dict in data_dict_list:
-            R_string = data_dict['R'] if isinstance(data_dict['R'], str) else f"R={round(data_dict['R'],5)}"
-            _ = ax.text(x_pos,ymax*1.09 - i*ymax/12, f"Run {data_dict['Run']}: {R_string}", size=18, color=data_dict['color'])
-            i += 1
-    
-    # other settings for plot
-    _ = ax.set_ylim(-200,ymax*1.2)
-    _ = ax.set_xscale('log')
-    _ = ax.set_xlabel('conc', fontsize=20)
-    _ = ax.set_ylabel('FI', fontsize=20)
-    _ = plt.xticks(fontsize=20)
-    _ = plt.yticks(fontsize=20)
-
-    protein = data_dict_list[0]['Protein']
-    plt.title(f"{protein}", fontsize=30)
-    
     return fig, ax

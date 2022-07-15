@@ -39,7 +39,7 @@ def r_squared(params, s):
     return 1 - (res_ss / tot_ss)
     
 
-def fit_standard(s):
+def fit_standard(s, B_bound=np.inf, **kwargs):
     '''
     takes a standard with columns conc and FI 
     and returns the params for the 5LP regression
@@ -47,9 +47,8 @@ def fit_standard(s):
     
     # init the params to sensible values (domain-specific)
     p0 = [10, 1000, 10000, -1, 1]
-    
     # fit using leastsq
-    plsq = least_squares(residuals, p0, jac="2-point", method="trf", args=(s['conc'], s['FI']),bounds=([-np.inf,-np.inf,-np.inf,-1,0.1],[np.inf, np.inf, np.inf,0,5]))
+    plsq = least_squares(residuals, p0, jac="2-point", method="trf", args=(s['conc'], s['FI']),bounds=([-np.inf,-np.inf,-np.inf,-1,0.1],[np.inf, B_bound, np.inf,0,5]))
     
     params = list(plsq['x'])
     
@@ -100,7 +99,6 @@ def get_confidence(params, fraction=0.9):
     return pd.concat([pd.Series(dict(Fmin=Fmin, Fmax=Fmax)), conf])
 
 
-
 def analyse_standard(standard_row, s, dilution=4, confidence=0.9, **kwargs):
     '''
     take a standard_row and and samples reduced to one protein
@@ -119,14 +117,14 @@ def analyse_standard(standard_row, s, dilution=4, confidence=0.9, **kwargs):
     ss.loc[ss['Type'] == "B", "Type"] = "S8"
 
     # get the starting concentration for that dilution
-    conc = standard_row['S1']
+    starting_conc = standard_row['S1']
 
     # fill the dilution series with the last being 0
-    ss.loc[:, 'conc'] = 10000 / np.power(dilution, ss['Type'].str.extract(r"S([1-8])", expand=False).astype(int) -1)
+    ss.loc[:, 'conc'] = starting_conc / np.power(dilution, ss['Type'].str.extract(r"S([1-8])", expand=False).astype(int) -1)
     ss.loc[ss['Type'] == "S8", 'conc'] = 0
     
     # fit the params
-    params, R = fit_standard(ss)
+    params, R = fit_standard(ss, **kwargs)
     # add the params and fit to the standard_row
     fit_series = pd.Series([" | ".join([str(round(p,3)) for p in params]), round(R, 6)], index=['params','R^2'])
     # add the ConcMin and ConcMax to standard_row
@@ -134,12 +132,16 @@ def analyse_standard(standard_row, s, dilution=4, confidence=0.9, **kwargs):
 
     standard_row = pd.concat([standard_row, fit_series, conf_series])
 
-    # compute the fit concentrations
-    ss = compute_conc(ss, standard_row)
+    # do not compute the fit concentrations!!! 
+    # ss = compute_conc(ss, standard_row)
     # compute StMax as maximum Fpos in the standard dilution series
     # this is a measure of the reach of the maximal standard concentrations
     # StMax < 0.6 mean the sigmoidal curve is largely extrapolated 
+    Fmin, Fmax = standard_row.loc[['Fmin', 'Fmax']]
+    ss.loc[:, 'Fpos'] = np.round((ss['FI'] - Fmin) / (Fmax - Fmin),3)
     standard_row["StMax"] = np.round(ss['Fpos'].max(),2)
+
+    # fix if StMax is very small Fmax needs to
 
     standard_row['ss'] = ss
     return standard_row
