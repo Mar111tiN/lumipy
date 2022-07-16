@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from script_utils import show_output
 from lumipy_utils import *
 from compute_5PL import *
-from plot_fit import plot_fitting
+from plot_fit import plot_fitting, plot_multi
 
 
 run_color={20211021:"green", 20211102:"orange", 20211222:"brown"}
@@ -40,7 +40,7 @@ def apply_external_standards(data_df, standard_df, fit_config):
     
     # now get the summary statistics
     sum_cols = ['concMean', 'concStd', 'FposMean']
-    data_df.loc[:, sum_cols] = data_df.apply(mean_row, standard_df=standard_df, axis=1, minFpos=fit_config['minFpos'])
+    data_df.loc[:, sum_cols] = data_df.apply(mean_row, standard_df=standard_df, axis=1, **fit_config)
     return data_df
 
 
@@ -332,7 +332,9 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     ################################################
     # set the run colors for this folder and load into configs
     config['plotting']['run_colors'] = {run:config['plotting']['use_colors'][i] for i, run in enumerate(standard_df['Run'].unique())}
+    for protein in standard_df['Protein'].unique():
 
+        _ = plot_multi(standard_df, data_df, protein=protein, **plot_config)
 
     ############ OUTPUT #############################
     # ##### output

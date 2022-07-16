@@ -194,7 +194,7 @@ def compute_external_fit(standard_row, df=pd.DataFrame()):
     return df
 
 
-def mean_row(row, standard_df=pd.DataFrame(), minFpos=0):
+def mean_row(row, standard_df=pd.DataFrame(), external_mean_method="arithmetic", minFpos=0, **kwargs):
     '''
     get the mean of all these runs and standards
     '''
@@ -211,9 +211,19 @@ def mean_row(row, standard_df=pd.DataFrame(), minFpos=0):
         if row[fcol] > minFpos:
             conc.append(row[ccol])
     if (l := len(conc)):
-        return pd.Series(
-            dict(
-                concMean=sum(conc) / len(conc),
-                concStd=np.std(conc),
-                FposMean=sum(Fpos) / len(Fpos)             
-                ))
+        if external_mean_method=="arithmetic":
+            return pd.Series(
+                dict(
+                    concMean=sum(conc) / len(conc),
+                    concStd=np.std(conc),
+                    FposMean=sum(Fpos) / len(Fpos)             
+                    ))
+        elif external_mean_method=="geometric":
+            geo_mean = np.power(np.prod(l), 1/l)
+            return pd.Series(
+                dict(
+                    concMean=round(geo_mean, 3),
+                    concStd=np.std(conc),
+                    FposMean=sum(Fpos) / len(Fpos)
+                )
+            )

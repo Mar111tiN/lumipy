@@ -33,14 +33,7 @@ def plot_external(
     if len(prot_df):
         in_range = (prot_df['FI']>= Fmin) & (prot_df['FI']<= Fmax)
         out_off_range = ~in_range & (prot_df['concMean'] > plot_zero)
-        
-        _ = ax.scatter(prot_df.loc[in_range, 'concMean'], prot_df.loc[in_range, 'FI'], 
-            marker=external_marker,
-            fc=external_color,
-            color=external_color,
-            s=external_point_size,
-            alpha=external_alpha,
-            )
+
         _ = ax.scatter(prot_df.loc[out_off_range, 'concMean'], prot_df.loc[out_off_range, 'FI'], 
             marker=sample_off_marker, 
             color=sample_off_color,
@@ -48,20 +41,28 @@ def plot_external(
             alpha=sample_off_alpha,
             )
             # return maximum y value
-
-        # plot the connecting lines
-        conc_cols = [f"conc{run}" for run in prot_standard['Run'].unique()]
-        # reduce the inrange data to applicable concentrations and get min and max values
-        # FI  min  max
-        line_df = prot_df.loc[in_range, ['FI'] + conc_cols].set_index('FI').agg(
-            ["min", "max"], axis=1
-            ).reset_index()
-        for i, row in line_df.iterrows():
-            _ = ax.plot([row['min'], row['max']], [row['FI'], row['FI']],
-            lw=external_connect_lw,
-            alpha=external_connect_alpha,
-            color=external_color
-            )
+        # only plot, if there is something in range left
+        if sum(in_range):
+            _ = ax.scatter(prot_df.loc[in_range, 'concMean'], prot_df.loc[in_range, 'FI'], 
+                marker=external_marker,
+                fc=external_color,
+                color=external_color,
+                s=external_point_size,
+                alpha=external_alpha,
+                )
+            # plot the connecting lines
+            conc_cols = [f"conc{run}" for run in prot_standard['Run'].unique()]
+            # reduce the inrange data to applicable concentrations and get min and max values
+            # FI  min  max
+            line_df = prot_df.loc[in_range, ['FI'] + conc_cols].set_index('FI').agg(
+                ["min", "max"], axis=1
+                ).reset_index()
+            for i, row in line_df.iterrows():
+                _ = ax.plot([row['min'], row['max']], [row['FI'], row['FI']],
+                lw=external_connect_lw,
+                alpha=external_connect_alpha,
+                color=external_color
+                )
 
         return prot_df['FI'].max(), prot_df['concMean'].max()
     return 0, 0
@@ -102,6 +103,7 @@ def plot_multi(standard_df,data_df,
     ss_point_size=50,
     plot_zero=0.1, 
     run_colors={},
+    hide=True,
     **kwargs
     ):
     '''
@@ -172,7 +174,7 @@ def plot_multi(standard_df,data_df,
     _ = plt.xticks(fontsize=plot_font_size)
     _ = plt.yticks(fontsize=plot_font_size)
 
-    plt.title(f"{standard_row['Protein']}", fontsize=plot_font_size*1.5)
+    plt.title(f"Luminex - {standard_row['Protein']}", fontsize=plot_font_size*1.5)
 
     if plot_folder:
         # set (and create if neccessary) the fig_plot_path ( = plot_folder/Run) 
@@ -180,7 +182,8 @@ def plot_multi(standard_df,data_df,
             os.makedirs(fig_plot_path)
         fig_file_path = os.path.join(fig_plot_path, f"{standard_row['Protein']}.{plot_type}")
         fig.savefig(fig_file_path)
-        plt.close()
+        if hide:
+            plt.close()
         if verbose:
             show_output(f"Saving combined plot for {protein} to {'/'.join(fig_file_path.split('/')[-3:])}")
     return fig, ax

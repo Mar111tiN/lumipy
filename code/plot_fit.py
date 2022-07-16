@@ -125,69 +125,6 @@ def plot_values(ax, standard_row,
     return 0, 0
 
 
-def plot_external(
-        ax, prot_standard, data_full_df,
-        protein="ABC",
-        external_point_size=5,
-        external_marker=".",
-        plot_zero=0.1,
-        external_color="purple",
-        external_alpha=1,
-        external_connect_lw=1,
-        external_connect_alpha=0.3,
-        sample_off_marker="x",
-        sample_off_size=50,
-        sample_off_color="gray",
-        sample_off_alpha=0.8,
-        **kwargs
-    ):
-    '''
-    print all other values that have been extrapolated
-    '''
-
-    # get the data from standard_df and data_full_df
-    # get the common Fmin and Fmax
-    Fmin = prot_standard['Fmin'].max()
-    Fmax = prot_standard['Fmax'].min()
-    prot_df = data_full_df.query('Protein == @protein and conc != conc')
-
-    if len(prot_df):
-        in_range = (prot_df['FI']>= Fmin) & (prot_df['FI']<= Fmax)
-        out_off_range = ~in_range & (prot_df['concMean'] > plot_zero)
-        
-        _ = ax.scatter(prot_df.loc[in_range, 'concMean'], prot_df.loc[in_range, 'FI'], 
-            marker=external_marker,
-            fc=external_color,
-            color=external_color,
-            s=external_point_size,
-            alpha=external_alpha,
-            )
-        _ = ax.scatter(prot_df.loc[out_off_range, 'concMean'], prot_df.loc[out_off_range, 'FI'], 
-            marker=sample_off_marker, 
-            color=sample_off_color,
-            s=sample_off_size,
-            alpha=sample_off_alpha,
-            )
-            # return maximum y value
-
-        # plot the connecting lines
-        conc_cols = [f"conc{run}" for run in prot_standard['Run'].unique()]
-        # reduce the inrange data to applicable concentrations and get min and max values
-        # FI  min  max
-        line_df = prot_df.loc[in_range, ['FI'] + conc_cols].set_index('FI').agg(
-            ["min", "max"], axis=1
-            ).reset_index()
-        for i, row in line_df.iterrows():
-            _ = ax.plot([row['min'], row['max']], [row['FI'], row['FI']],
-            lw=external_connect_lw,
-            alpha=external_connect_alpha,
-            color=external_color
-            )
-
-        return prot_df['FI'].max(), prot_df['concMean'].max()
-    return 0, 0
-
-
 def plot_confidence_rect(ax, standard_row, conf_rect_color=[0.701, 0.764, 0.858], conf_rect_alpha=0.5, **kwargs):
     '''
     plots the confidence interval for a given standard_row
