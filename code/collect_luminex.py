@@ -8,9 +8,6 @@ from compute_5PL import *
 from plot_fit import plot_fitting, plot_multi
 
 
-run_color={20211021:"green", 20211102:"orange", 20211222:"brown"}
-
-
 def fit_standard_row(standard_row, data_df=pd.DataFrame(), **fit_config):
     '''
     for every row of the standards the fit_params and other coefficients
@@ -154,8 +151,7 @@ def read_raw_plate(plate, control_df, config={}):
         # calculate the standard fit and add to standard_df
         standard_df = standard_df.apply(fit_standard_row, data_df=raw_df, axis=1, **config['fitting'])
         if config['plot_fit']:
-            plot_config = config['plotting']
-            standard_df.apply(plot_fitting, axis=1, **plot_config, verbose=config['verbose'])
+            standard_df.apply(plot_fitting, axis=1, **config['plotting'], verbose=config['verbose'])
             
         # extract the data from the standard_df into raw_df
         raw_df = pd.concat(list(standard_df['data']))
@@ -314,7 +310,7 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
             return [pd.DataFrame()] * 4
     # maybe no new standard has been added
     if len(standard_dfs):
-        standard_df = pd.concat(standard_dfs).sort_values(base_cols + ['Protein']).drop_duplicates(base_cols + ['Protein'])
+        standard_df = pd.concat(standard_dfs).sort_values(base_cols + ['Protein']).drop_duplicates(base_cols + ['Protein']).reset_index(drop=True)
     data_df = pd.concat(data_dfs).sort_values(['Run', 'Plex', 'Protein', 'Type', 'Well']).reset_index(drop=True)
 
     ############## ADD EXTERNAL STANDARDS ##########
@@ -331,10 +327,10 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     ############## MULTIFIT PLOT ###################
     ################################################
     # set the run colors for this folder and load into configs
-    config['plotting']['run_colors'] = {run:config['plotting']['use_colors'][i] for i, run in enumerate(standard_df['Run'].unique())}
-    for protein in standard_df['Protein'].unique():
-
-        _ = plot_multi(standard_df, data_df, protein=protein, **plot_config)
+    if config['plot_fit']:
+        config['plotting']['run_colors'] = {run:config['plotting']['use_colors'][i] for i, run in enumerate(standard_df['Run'].unique())}
+        for protein in standard_df['Protein'].unique():
+            _ = plot_multi(standard_df, data_full, protein=protein, **config['plotting'])
 
     ############ OUTPUT #############################
     # ##### output
@@ -374,4 +370,4 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     data_full.to_csv(csv_file, index=False, sep="\t", compression="gzip")
     show_output(f"Finished collecting Luminex data for folder {config['data_path']}", color="success")
     return plate_df, standard_df, sum_df, data_full
-    return plate_df, standard_df, sum_df, data_df        
+    return plate_df, standard_df, sum_df, data_df  

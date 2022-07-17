@@ -55,7 +55,6 @@ def fit_standard(s, B_bound=np.inf, **kwargs):
     return params, r_squared(params, s)
 
 
-
 def compute_conc(df, standard_row, conc_col_suff=""):
     '''
     calculate the expected controls/samples from 5PL fit and compare to bounds from
@@ -219,7 +218,7 @@ def mean_row(row, standard_df=pd.DataFrame(), external_mean_method="arithmetic",
                     FposMean=sum(Fpos) / len(Fpos)             
                     ))
         elif external_mean_method=="geometric":
-            geo_mean = np.power(np.prod(l), 1/l)
+            geo_mean = np.power(np.prod(np.abs(conc)), 1/l)
             return pd.Series(
                 dict(
                     concMean=round(geo_mean, 3),
