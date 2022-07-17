@@ -174,6 +174,7 @@ def plot_multi(standard_df,data_df,
     for _, standard_row in prot_standard.iterrows():
         ymax_samples, xmax_samples = plot_values(
             ax, standard_row, 
+            multi=True,
             **kwargs
             )
         # update the coords

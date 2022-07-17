@@ -330,7 +330,7 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     if config['plot_fit']:
         config['plotting']['run_colors'] = {run:config['plotting']['use_colors'][i] for i, run in enumerate(standard_df['Run'].unique())}
         for protein in standard_df['Protein'].unique():
-            _ = plot_multi(standard_df, data_full, protein=protein, **config['plotting'])
+            _ = plot_multi(standard_df, data_full, protein=protein, verbose=config['verbose'], **config['plotting'])
 
     ############ OUTPUT #############################
     # ##### output

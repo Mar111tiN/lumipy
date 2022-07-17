@@ -106,11 +106,15 @@ def plot_values(ax, standard_row,
         sample_off_size=50,
         sample_off_color="gray",
         sample_off_alpha=0.8,
+        multi=False,
         **kwargs
         ):
     '''
     subplot the standard curve
     '''
+
+    if multi:
+        sample_off_color=sample_color
 
     data_df, Fmin, Fmax = list(standard_row.loc[['data', 'Fmin', 'Fmax']])
     if len(data_df):
@@ -211,7 +215,7 @@ def plot_external(
 
         _ = ax.scatter(prot_df.loc[out_off_range, 'concMean'], prot_df.loc[out_off_range, 'FI'], 
             marker=sample_off_marker, 
-            color=sample_off_color,
+            color=external_color,
             s=sample_off_size,
             alpha=sample_off_alpha,
             )
