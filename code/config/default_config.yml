@@ -3,24 +3,73 @@ verbose: False
 plot_fit: True
 write_excel: True
 output_untidy: True
-use_existing: True
+use_existing: True # reloads files if file-to-be-saved already exists
 use_file: ""  # this file will be used and only new plates will be added (overrules use_existing)
-raw_pattern: rawdata
-paths: # all paths are absolute paths or relative to base_path or home as default) 
-    base_path: Dropbox/Icke/Work
-    data_path: Luminex/data/LuminexDataAll    
-    output_path: Luminex/output
-    params_file: Luminex/info/LuminexParams.xlsx  # contains all device-specific Plex data
+raw_pattern: "rawdata" # pattern to determine if file is raw file (if "" it will be set by absence of conc pattern)
+conc_pattern: ""     # pattern to determine if file is computed file (if "" it will be set by absence of raw pattern)
+plate_pattern: Plate # pattern to detect plate number in file name (set to plate1 if no pattern is detected!)
+plex_pattern: Plex  # pattern to detect plex in file name
+paths: 
+    base_path: Dropbox/Icke/Work/Luminex  # abs or relative to home
+    # all paths belowe are absolute paths or relative to base_path
+    data_path: data/LuminexDataTest
+    output_path: output
+    params_file: info/LuminexParams.xlsx  # contains all device-specific Plex data
 fitting:
     dilution: 4        # dilution of the standard dilution series
-    confidence: 0.95    # the range of FI values that are used for Fpos calculation
-    minFpos: 0      # for external standards, exclude conc with Fpos < minFpos 
+    confidence: 0.98    # the range of FI values that are used for Fpos calculation
+    minFpos: -0.1      # for external standards, exclude conc with Fpos < minFpos 
+    B_bound: 37000  # upper bound for the standard fitting
+    external_mean_method: geometric # "geometric" or "arithmetic"
 plotting:
     plot_type: pdf
+    figsize: [12,12]
     plot_folder_name: curves  # images are stored in output_path/<EXP_FOLDER>/<plot_folder_name>
-    zero_value: 0.1     # value used in log-display for blank values (zero does not work)
+    zero_log_dist: 0.5   # the min dist for next lower log-level for zero plotting
     plot_font_size: 20
-    control_color: yellow
+    sample_point_size: 80
+    info_font_size: 25
+    info_font_color: darkgray
+    sample_marker: o
     sample_color: green
+    sample_alpha: 1
+    ss_point_size: 50
+    sc_point_size: 80
+    sample_off_marker: x
+    sample_off_size: 50
+    sample_off_color: gray
+    sample_off_alpha: 0.4
+    external_marker: "."
+    external_color: purple
+    external_alpha: 0.7
+    external_point_size: 140
+    external_connect_lw: 1
+    external_connect_alpha: 0.3
+    control_color: yellow
+    control_lw: 3
     standard_color: blue
-    show_params: True
+    show_fit_params: False
+    plot_confidence: True
+    plot_multi_samples: True
+    conf_rect_color: [0.701, 0.764, 0.858]
+    conf_rect_alpha: 0.5
+    multi_conf_alpha: 0.3   # the alpha value for the confidence
+    use_colors:
+        - [0.53,0.61,0.33]
+        - [0.82,0.79,0.2]
+        - [0.97,0.58,0.04]
+        - [0.15,0.97,0.04]
+        - [0.04,0.78,0.97]
+        - [0.04,0.19,0.97]
+        - [0.97,0.04,0.05]
+        - [0.36,0.2,0.21]
+        - [0.25,0.53,0.44]
+        - [0.93,0.99,0.01]
+    minor_x_grids: True
+    minor_grid_lw: 0.6
+    minor_grid_alpha: 0.6
+    log_tick_step: 1
+summary:
+    minFpos: 0.1 # minimal Fpos to be considered as goodFpos
+    minFI: 2000 # minimal FI to be used for goodFI
+    

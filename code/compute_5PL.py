@@ -19,7 +19,8 @@ def retro_5PL(fi, params):
     
     A,B,C,D,E = params
     conc = C * np.power(np.power((B-A)/(fi-A), 1/E)-1, 1/D).fillna(0)
-
+    # for values above Fmax set the highest value
+    conc.loc[conc<0] = conc.max()
     return np.round(conc,2)
     
     
@@ -48,7 +49,7 @@ def fit_standard(s, B_bound=np.inf, **kwargs):
     # init the params to sensible values (domain-specific)
     p0 = [10, 1000, 10000, -1, 1]
     # fit using leastsq
-    plsq = least_squares(residuals, p0, jac="2-point", method="trf", args=(s['conc'], s['FI']),bounds=([-np.inf,-np.inf,-np.inf,-1,0.1],[np.inf, B_bound, np.inf,0,5]))
+    plsq = least_squares(residuals, p0, jac="2-point", method="trf", args=(s['conc'], s['FI']), bounds=([-np.inf,-np.inf,-np.inf,-1,0.1],[np.inf, B_bound, np.inf,0,5]))
     
     params = list(plsq['x'])
     

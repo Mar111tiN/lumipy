@@ -106,32 +106,32 @@ def read_header(file, is_excel=False):
     
     return plate_df
 
-def get_run_plex(file):
+def get_run_plex(file, plex_pattern="Plex", plate_pattern="plate", **kwargs):
     '''
     retrieve run and flex from the file name using regex parts
     '''
     plate = 1
     for s in os.path.basename(file).split(".")[0].split("_"):
-        if re.match(r"[0-9]+-Plex", s):
+        if re.match(f"[0-9]+-{plex_pattern}", s):
             plex = s
         elif re.match(r"[0-9]{8}", s):
                 run = str(int(s) - 20000000)
-        elif re.match(r"Platte([0-9]+)", s):
-            plate = int(s.replace("Platte", ""))
+        elif re.match(f"{plate_pattern}([0-9]+)", s):
+            plate = int(s.replace(plate_pattern, ""))
     return (run, plex, plate)
 
 
-def isMatch(conc_file, run, plex, plate):
+def isMatch(conc_file, run, plex, plate, **kwargs):
     '''
     checks if a conc_file fits to a run-plex-plate combo
     '''
     
-    crun, cplex, cplate = get_run_plex(conc_file)
+    crun, cplex, cplate = get_run_plex(conc_file, **kwargs)
     
     return (crun == run) & (cplex == plex) & (cplate == plate)
 
 
-def get_luminex_plates(data_folder, raw_pattern="rawdata", **kwargs):
+def get_luminex_plates(*, data_path, raw_pattern="rawdata", conc_pattern="conc", **kwargs):
     '''
     create a data_list containing the raw_data and conc excel files
     for a given folder (recursively)
@@ -149,30 +149,43 @@ def get_luminex_plates(data_folder, raw_pattern="rawdata", **kwargs):
     raw_file_list = []
     conc_file_list = []
     
-    # programmed to run recursively
-    for f in [folder for folder in os.walk(data_folder)]:
+    # stop if no pattern is given
+    if not raw_pattern and not conc_pattern:
+        return "No patterns!"
+
+    # find recursively all relevant files
+    for f in [folder for folder in os.walk(data_path)]:
         folder = f[0]
         # exclude temp files of open excel files
-        raw_files = [os.path.join(folder, file) for file in f[2] if raw_pattern in file.lower() and not os.path.basename(file).startswith("~$")]
+        cand_files = [os.path.join(folder, file) for file in f[2] if not os.path.basename(file).startswith("~$") and not os.path.basename(file).startswith(".") and os.path.splitext(file)[1] in [".csv", ".xls", ".xlsx"]]
+        if raw_pattern:
+            raw_files = [file for file in cand_files if raw_pattern in file.lower()]
+        else: # if raw_pattern == "" it will be set by absence of conc pattern
+            raw_files = [file for file in cand_files if not conc_pattern in file.lower()]
         raw_file_list += raw_files
         
         # conc files are defined by not containing the raw_pattern
-        conc_files = [os.path.join(folder, file) for file in f[2] if not raw_pattern in file.lower() and not os.path.basename(file).startswith("~$") and not os.path.basename(file).startswith(".")]
+        if conc_pattern:
+            conc_files = [file for file in cand_files if conc_pattern in file.lower()]
+        else:
+            conc_files = [file for file in cand_files if not raw_pattern in file.lower()]
         conc_file_list += conc_files
+
+
     # find the matching conc files
     plate_list = []                
     for raw_file in raw_file_list:
-        short_file = raw_file.replace(f"{data_folder}/", "")
-        run, plex, plate = get_run_plex(raw_file)
-        conc_files = [f for f in conc_file_list if isMatch(f, run, plex, plate)]
-        conc_file = conc_files[0].replace(f"{data_folder}/", "") if len(conc_files) else None
+        short_file = raw_file.replace(f"{data_path}/", "")
+        run, plex, plate = get_run_plex(raw_file, **kwargs)
+        conc_files = [f for f in conc_file_list if isMatch(f, run, plex, plate, **kwargs)]
+        conc_file = conc_files[0].replace(f"{data_path}/", "") if len(conc_files) else None
         plate_list.append(dict(Run=run, Plex=plex, Plate=plate, rawPath=short_file, concPath=conc_file))       
     # check for isolated conc-files
     for conc_file in conc_file_list:
-        run, plex, plate = get_run_plex(conc_file)
-        raw_files = [f for f in raw_file_list if isMatch(f, run, plex, plate)]
+        run, plex, plate = get_run_plex(conc_file, **kwargs)
+        raw_files = [f for f in raw_file_list if isMatch(f, run, plex, plate, **kwargs)]
         if not len(raw_files):
-            plate_list.append(dict(Run=run, Plex=plex, Plate=plate, rawPath=None, concPath=conc_file.replace(f"{data_folder}/", "")))
+            plate_list.append(dict(Run=run, Plex=plex, Plate=plate, rawPath=None, concPath=conc_file.replace(f"{data_path}/", "")))
     
     # convert into df
     plates_df = pd.DataFrame(plate_list).sort_values(['Run', 'Plex', 'Plate']).reset_index(drop=True)

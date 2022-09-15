@@ -20,7 +20,7 @@ def fit_standard_row(standard_row, data_df=pd.DataFrame(), **fit_config):
     standard_row = analyse_standard(standard_row, s, **fit_config)
     # get the confidence information about the control samples
     standard_row = analyse_control(standard_row, s)
-    # get the samples
+    # get the samples and compute the sample values
     sx = s.loc[s['Type'] == "X", :]
     standard_row['data'] = compute_conc(sx, standard_row)
     
@@ -41,20 +41,45 @@ def apply_external_standards(data_df, standard_df, fit_config):
     return data_df
 
 
-def make_protein_summary(data_df, minFpos=0.1, minFI=2000):
+def make_protein_summary(data_df, minFpos=0):
     '''
     creates summary statistics for proteins
     '''
 
-    sum_df = data_df.groupby("Protein", as_index=False).agg(
+    # create an Fpos from the maximum of all external Fpos
+    data_df.loc[data_df['conc'] != data_df['conc'], "Fpos"] = data_df.loc[data_df['conc'] != data_df['conc'], [col for col in data_df.columns if re.match("Fpos[0-9]+", col)]].max(axis=1)
+
+    
+    all_df = data_df.groupby("Protein").agg(
+        FImin=pd.NamedAgg("FI", "min"),
+        FImax=pd.NamedAgg("FI", "max"),
+        FImean=pd.NamedAgg("FI", "mean"),
         FposMean=pd.NamedAgg("Fpos", "mean"),
-        goodFposfrac=pd.NamedAgg("Fpos", lambda prot: np.sum(prot > minFpos) / len(prot)),
-        FIMean=pd.NamedAgg("FI", "mean"),
-        goodFIfrac=pd.NamedAgg("FI", lambda prot: np.sum(prot > minFI) / len(prot)),
-        FposExtMean=pd.NamedAgg("FposMean", "mean"),
-        goodFposExtfrac=pd.NamedAgg("FposMean", lambda prot: np.sum(prot > minFpos) / len(prot))
+        goodFposCount=pd.NamedAgg("Fpos", lambda fpos: np.sum(fpos > minFpos)),
+        Count=pd.NamedAgg(f"Fpos", "size")
     )
-    return sum_df
+        
+    
+    ### data with standard
+    valid_df = data_df.query('conc == conc').groupby("Protein").agg(
+        FposMeanValid=pd.NamedAgg(f"Fpos", "mean"),
+        goodFposCountValid=pd.NamedAgg(f"Fpos", lambda fpos: np.sum(fpos > minFpos)),
+        CountValid=pd.NamedAgg(f"Fpos", "size")
+    )
+    
+    ### external data
+    ext_df = data_df.query('conc != conc').groupby("Protein").agg(
+        FposMeanExt=pd.NamedAgg(f"FposMean", "mean"),
+        goodFposCountExt=pd.NamedAgg(f"Fpos", lambda fpos: np.sum(fpos > minFpos)),
+        CountExt=pd.NamedAgg(f"Fpos", "size")
+    )
+    sum_df = all_df.join(valid_df).join(ext_df)
+    
+    for col in sum_df.columns:
+        if "Count" in col:
+            sum_df.loc[:, col] = sum_df[col].fillna(0).astype(int)
+    
+    return sum_df.reset_index(drop=False), data_df
 
 
 def read_raw_plate(plate, control_df, config={}):
@@ -253,8 +278,24 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
             use_old = 2
 
     # load the plates and remove the duplicates from old runs
-    plate_df = get_luminex_plates(config['data_path'], raw_pattern=config['raw_pattern'])
-    
+    plate_df = get_luminex_plates(**config)
+
+    # exit if no patterns have been set
+    if isinstance(plate_df, str):
+        if plate_df == "No patterns!":
+            show_output("No patterns have been set! You have to define either a raw file or a conc file pattern!", color="warning")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # check that pattern does not create duplicate entries
+    if len(plate_df.loc[plate_df.duplicated(['Run', 'Plex', 'Plate']), :]):
+        show_output(
+        """Your folder seems to contain plates with similar Run-Plex-Plate signatures!
+        Maybe your patterns are not correct?
+        Check plate_df and your patterns and try again!
+        """, color="warning"
+        )
+        return plate_df, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
     if use_old:
         # only use the new plates (drop duplicates)
         old_plates = old_data['Plates'].loc[:, base_cols + ['rawPath', 'concPath']]
@@ -276,8 +317,8 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
         if not len(plate_df.index):
             show_output(f"No new data found in {config['data_path']}. Exiting!", color="success")
             # only recompute the protein stats in case something has been added in code
-            sum_df = make_protein_summary(old_data['tidyData'], **config['summary'])
-            return old_data['Plates'], old_data['Standards'], sum_df, old_data['tidyData']
+            sum_df, _ = make_protein_summary(old_data['tidyDataFull'], **config['summary'])
+            return old_data['Plates'], old_data['Standards'], sum_df, old_data['tidyDataFull']
 
     ############## READ RAW DATA ###################
     ################################################
@@ -319,45 +360,52 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     data_cols = list(data_df.columns)
     sum_cols = ['concMean', 'concStd', 'FposMean']
     data_df = apply_external_standards(data_df, standard_df, config['fitting'])
+
+
+    ############## MULTIFIT PLOT ###################
+    ################################################
+    # plotting should only be done on new data
+    # set the run colors for this folder and load into configs
+    if config['plot_fit']:
+        config['plotting']['run_colors'] = {run:config['plotting']['use_colors'][i] for i, run in enumerate(standard_df['Run'].unique())}
+        for protein in standard_df['Protein'].unique():
+            _ = plot_multi(standard_df, data_df, protein=protein, verbose=config['verbose'], **config['plotting'])
+
+
+    ############## COMBINE WITH OLD ################
+    ################################################
+    if use_old:
+        # add the new stuff to the old sheets and sort again
+        if use_old == 1:
+            show_output(f"Combining preexisting data from {config['use_file']} and new data to {excel_file}")
+        if use_old == 2:
+            show_output(f"Adding new data to {excel_file}")
+        plate_df = pd.concat([old_data['Plates'], plate_df]).sort_values(base_cols).reset_index(drop=True)
+        standard_df = pd.concat([old_data['Standards'], standard_df]).sort_values(base_cols + ['Protein']).drop_duplicates().reset_index(drop=True)
+        data_df = pd.concat([old_data['tidyData'], data_df]).sort_values(data_cols).drop_duplicates().reset_index(drop=True)
+    else:
+        show_output(f"Writing excel output to {excel_file}")
+
+
+    ############## PROTEIN SUMMARY #################
+    ################################################
+    # protein summary should be performed on combined data
+    sum_df, data_df = make_protein_summary(data_df, **config['summary'])
     # reduce the data_df to fewer output
     data_full = data_df.copy()
     data_df = data_df.loc[:, data_cols + sum_cols]
 
 
-    ############## MULTIFIT PLOT ###################
-    ################################################
-    # set the run colors for this folder and load into configs
-    if config['plot_fit']:
-        config['plotting']['run_colors'] = {run:config['plotting']['use_colors'][i] for i, run in enumerate(standard_df['Run'].unique())}
-        for protein in standard_df['Protein'].unique():
-            _ = plot_multi(standard_df, data_full, protein=protein, verbose=config['verbose'], **config['plotting'])
-
     ############ OUTPUT #############################
     # ##### output
     if config['write_excel']:
-        if use_old:
-            # add the new stuff to the old sheets and sort again
-            if use_old == 1:
-                show_output(f"Combining preexisting data from {config['use_file']} and new data to {excel_file}")
-            if use_old == 2:
-                show_output(f"Adding new data to {excel_file}")
-            plate_df = pd.concat([old_data['Plates'], plate_df]).sort_values(base_cols).reset_index(drop=True)
-            standard_df = pd.concat([old_data['Standards'], standard_df]).sort_values(base_cols + ['Protein']).drop_duplicates().reset_index(drop=True)
-            data_df = pd.concat([old_data['tidyData'], data_df]).sort_values(data_cols).drop_duplicates().reset_index(drop=True)
-        else:
-            show_output(f"Writing excel output to {excel_file}")
-
-        ############## PROTEIN SUMMARY #################
-        ################################################
-        # protein summary should be performed on combined data
-        sum_df = make_protein_summary(data_df, **config['summary'])
-
         with pd.ExcelWriter(excel_file, mode="w") as writer:
             plate_df.to_excel(writer, sheet_name="Plates", index=False)
             # drop the dfs in standard_df for output
             standard_df.drop(['ss', 'sc', 'data'], axis=1).to_excel(writer, sheet_name="Standards", index=False)
             sum_df.to_excel(writer, sheet_name="ProteinStats", index=False)
             data_df.to_excel(writer, sheet_name="tidyData", index=False)
+            data_full.to_excel(writer, sheet_name="tidyDataFull", index=False)
             if config['output_untidy']:
                 for col in ['FI', 'conc', 'concCI', 'Fpos']:
                     set_cols = ['Run', 'Plex', 'Plate', 'Well', 'Type', 'SE']
@@ -370,4 +418,3 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     data_full.to_csv(csv_file, index=False, sep="\t", compression="gzip")
     show_output(f"Finished collecting Luminex data for folder {config['data_path']}", color="success")
     return plate_df, standard_df, sum_df, data_full
-    return plate_df, standard_df, sum_df, data_df  
