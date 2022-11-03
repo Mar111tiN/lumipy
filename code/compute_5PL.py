@@ -93,7 +93,7 @@ def get_confidence(params, fraction=0.9):
     FoffSet = Frange * (1-fraction) / 2
     Fmin = params[0] + FoffSet
     Fmax = params[1] - FoffSet
-    conf = retro_5PL(pd.DataFrame([Fmin, Fmax]), params)[0]
+    conf = retro_5PL(pd.Series([Fmin, Fmax]), params)
     conf.index = ['ConcMin', 'ConcMax']
     # add Fmin and Fmax to the pd.Series
     return pd.concat([pd.Series(dict(Fmin=Fmin, Fmax=Fmax)), conf])

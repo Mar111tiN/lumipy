@@ -21,9 +21,11 @@ def fit_standard_row(standard_row, data_df=pd.DataFrame(), **fit_config):
     # get the confidence information about the control samples
     standard_row = analyse_control(standard_row, s)
     # get the samples and compute the sample values
-    sx = s.loc[s['Type'] == "X", :]
-    standard_row['data'] = compute_conc(sx, standard_row)
-    
+
+    # if you want to exclude the controls and standards
+    # s = s.loc[s['Type'] == "X", :]
+    standard_row['data'] = compute_conc(s, standard_row)
+
     return standard_row
 
 
@@ -177,7 +179,10 @@ def read_raw_plate(plate, control_df, config={}):
         standard_df = standard_df.apply(fit_standard_row, data_df=raw_df, axis=1, **config['fitting'])
         if config['plot_fit']:
             standard_df.apply(plot_fitting, axis=1, **config['plotting'], verbose=config['verbose'])
-            
+        # #####
+        #     print(standard_df['Type'].unique())
+        # #####
+
         # extract the data from the standard_df into raw_df
         raw_df = pd.concat(list(standard_df['data']))
         # standard_df = standard_df.drop(['ss', 'sc', 'data'], axis=1)
@@ -192,7 +197,7 @@ def read_raw_plate(plate, control_df, config={}):
         standard_df = pd.DataFrame()
 
     raw_df = raw_df.sort_values(['Run','Plex', 'Type', 'Protein', 'Well'])
-    
+
     return plate, standard_df, raw_df
 
 
@@ -345,9 +350,11 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
     else:
         show_output(f"No new data found in {config['data_path']}. Exiting!", color="success")
         if use_old:
+            # for consistency, return the old data if nothing new is there
             return old_data['Plates'], old_data['Standards'], old_data['ProteinStats'], old_data['tidyData']
         # really nothing there
         else:
+            # for consistency, return 4 empty dfs 
             return [pd.DataFrame()] * 4
     # maybe no new standard has been added
     if len(standard_dfs):
@@ -407,10 +414,10 @@ def read_luminex_folder(analysis_name="results", config_file={}, **kwargs):
             data_df.to_excel(writer, sheet_name="tidyData", index=False)
             data_full.to_excel(writer, sheet_name="tidyDataFull", index=False)
             if config['output_untidy']:
+                # get the all the proteins that had been used in this setup
+                used_proteins = list(set(control_df['Protein']).intersection(data_df['Protein'].unique()))
                 for col in ['FI', 'conc', 'concCI', 'Fpos']:
                     set_cols = ['Run', 'Plex', 'Plate', 'Well', 'Type', 'SE']
-                    # get the all the proteins that had been used in this setup
-                    used_proteins = list(set(control_df['Protein']).intersection(data_df.columns))
                     pivot_df = data_df.set_index(set_cols).pivot(columns="Protein", values=col).loc[:, used_proteins].dropna(how="all").reset_index(drop=False)
                     pivot_df.to_excel(writer, sheet_name=col, index=False)
 
