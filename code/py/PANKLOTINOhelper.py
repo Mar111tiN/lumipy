@@ -97,7 +97,7 @@ def import_tino_data(tino_file, sheet=""):
     
     # detect the row coords of the sub tables
     ins = get_subdata_index(tino_file, sheet=sheet)
-    show_output("Detected header rows in data at following lines", ", ".join([str(i+1) for i in ins[:-1]]))
+    show_output(f"Detected header rows in data at following lines: {', '.join([str(i+1) for i in ins[:-1]])}")
 
     
     # go through all the subtables and import
@@ -395,7 +395,7 @@ def get_tino_all(lumi21_excel, lumi22_excel, tino_master_excel, plexes21=[3,11,2
     tino2122.loc[tino2122['suff'] == "T", "SampleType"] = "tumor unknown"
     tino2122.loc[tino2122['suff'] == "IF", "SampleType"] = "tumor IF"
     tino2122.loc[tino2122['suff'] == "CP", "SampleType"] = "tumor CP"
-
+    
     #### merge the patients
     # merge the patients
     tino_patients = tino_patients.merge(tino2122.loc[:, ['Project', 'PatientCode', 'Note']].drop_duplicates(['PatientCode']), on=['Project', 'PatientCode'], how="outer", indicator=True)
@@ -403,13 +403,28 @@ def get_tino_all(lumi21_excel, lumi22_excel, tino_master_excel, plexes21=[3,11,2
     
     # merge the cases
     tino_cases = tino_cases.merge(tino2122.loc[:, ['Project', 'PatientCode', 'Note']].drop_duplicates(['PatientCode']), on=['Project', 'PatientCode'], how="outer", indicator=True).sort_values(['PatientCode']).reset_index(drop=True)
-
+    
     # merge the samples
-    tino_samples = tino_samples.merge(tino2122.loc[:, ['Project', 'PatientCode', 'SampleName', 'SampleType', 'Note']].drop_duplicates(['PatientCode', 'SampleName']), on=['Project', 'PatientCode', 'SampleName', 'SampleType'], how="outer", indicator=True).sort_values(['PatientCode', 'SampleName']).reset_index(drop=True)
+    tino_samples = tino_samples.merge(tino2122.loc[:, [
+        'Project', 
+        'PatientCode',
+        'SampleName',
+        'SampleType',
+        'Note'
+    ]].drop_duplicates([
+        'PatientCode',
+        'SampleName'
+    ]
+    ), on=[
+        'Project',
+        'PatientCode',
+        'SampleName'
+    ], how="outer", indicator=True).sort_values(['PatientCode', 'SampleName']).reset_index(drop=True).rename({'SampleType_x':'SampleType'}, axis=1)
     # tino_samples.loc[:, ]
-    # return tino_patients, tino_cases, tino_samples
-
-
+    
+    # get node info from 2122 into tino_samples in case they are missing in tino_samples
+    tino_samples.loc[tino_samples['SampleType'] != tino_samples['SampleType'], 'SampleType'] = tino_samples['SampleType_y']
+    
     # unify the merged Notes and mark supposed new patients
     tino_patients, tino_cases, tino_samples = [mark_missing(flatten_notes(df)) for df in [tino_patients, tino_cases, tino_samples]]
 
@@ -497,13 +512,12 @@ def get_pankreas(df2122, pancreas_excel):
     pank_df.loc[pank_df['Tissue'] == "Leber", "Tissue"] = "Liver"
     pank_df.loc[:, ['Sex', 'Age', 'DOD']] = 'Unknown', -1, -1
     pank_df['DOD'] = pd.to_datetime(pank_df['DOD'].astype(str), errors="coerce")
+      
     # split the data into patients, cases, samples, wells
     pank_pat_codes = pank_df.loc[:, patient_code_cols].drop_duplicates(['PatientCode', 'PatientCodeAlt']).reset_index(drop=True)
     pank_patients = pank_df.copy().loc[:, patient_cols].drop_duplicates('PatientCode').reset_index(drop=True)
-
-
-    pank_cases = pank_df.loc[:, simple_case_cols].query('Disease != "Normal"').sort_values("PatientCode").reset_index(drop=True)
-    pank_samples = pank_df.loc[:, sample_biopsy_cols]
+    pank_cases = pank_df.loc[:, simple_case_cols].query('Disease != "Normal"').drop_duplicates(['PatientCode', 'DOX']).sort_values("PatientCode").reset_index(drop=True)
+    pank_samples = pank_df.loc[:, sample_biopsy_cols].drop_duplicates(['PatientCode', 'SampleName'])
 
     # keep the DOX data for sample/wells
     pank_wells = pank_df.loc[:, sample_well_cols + ['LumiDOX']].rename({'LumiDOX':"DOX"}, axis=1)
@@ -561,7 +575,15 @@ def get_LO_data(df2122, LO_excel):
     return LO_pat_codes, LO_patients, LO_cases, LO_samples, LO_wells
 
 
-def gather_All(lumi21_excel, lumi22_excel, tino_master_excel, pancreas_excel, LO_excel, plexes21=[3,11,23,38], excel_out=""):
+def gather_PANKLOTINO(
+    lumi21_excel="", 
+    lumi22_excel="",
+    tino_master_excel="",
+    pancreas_excel="",
+    LO_excel="",
+    plexes21=[3,11,23,38],
+    excel_out=""
+    ):
     '''
     bring all data together and return individual dfs
     '''
@@ -614,12 +636,12 @@ def gather_All(lumi21_excel, lumi22_excel, tino_master_excel, pancreas_excel, LO
     sample_df = sample_df.rename({'Weight':'SourceAmount'}, axis=1).loc[:, sample_cols]
 
     # make the Note columns explicit
-    well_df = well_df.rename({'Note':'Note_Well'}, axis=1)
-    sample_df = sample_df.rename({'Note':'Note_Sample'}, axis=1)
-    biopsy_df = biopsy_df.rename({'Note':'Note_Biopsy'}, axis=1)
-    case_df = case_df.rename({'Note':'Note_Case'}, axis=1)
-    patient_df = patient_df.rename({'Note':'Note_Patient'}, axis=1)
-    pat_code_df = pat_code_df.rename({'Note':'Note_PatCode'}, axis=1)
+    well_df = well_df.rename({'Note':'Note_Well'}, axis=1).sort_values(['Run', 'Plate','Project', 'SampleName', 'Plex'])
+    sample_df = sample_df.rename({'Note':'Note_Sample'}, axis=1).sort_values(['Project', 'BiopsyName', 'SampleName'])
+    biopsy_df = biopsy_df.rename({'Note':'Note_Biopsy'}, axis=1).sort_values(['Project', 'PatientCode', 'BiopsyName'])
+    case_df = case_df.rename({'Note':'Note_Case'}, axis=1).sort_values(['Project', 'PatientCode', 'DOX'])
+    patient_df = patient_df.rename({'Note':'Note_Patient'}, axis=1).sort_values(['Project', 'PatientCode'])
+    pat_code_df = pat_code_df.rename({'Note':'Note_PatCode'}, axis=1).sort_values(['Project', 'PatientCode'])
 
     # convert datetime to date
     patient_df['DOD'] = pd.to_datetime(patient_df['DOD']).dt.date
@@ -638,3 +660,94 @@ def gather_All(lumi21_excel, lumi22_excel, tino_master_excel, pancreas_excel, LO
             well_df.to_excel(writer, sheet_name="Wells", index=False)
 
     return pat_code_df, patient_df, case_df, biopsy_df, sample_df, well_df
+
+
+
+
+####### Aggregate TINO DATA from back then
+def makeTinoMaster(tino_patient_excel, lumi_param_excel="", tino_data_excel="", tino_data_sheet="", excel_out=""):
+    '''
+    wrangle all the data from Tinos data tables to create the TinoMaster file
+    '''
+    
+    # load the tino patients and other required data
+    clean_df = get_patients_clean(tino_patient_excel)
+    plex_df = pd.read_excel(lumi_param_excel, sheet_name="Proteins").loc[:, ['Protein', 'Plex']]
+    
+    
+    # retrieve the patient columns
+    patient_df = clean_df.loc[:, tino_pat_cols].drop_duplicates()
+    
+    # retrieve the case columns
+    case_df = clean_df.loc[:, tino_case_cols].sort_values(['PatientCode', 'tumor surgery']).groupby("PatientCode").first().reset_index()
+    case_df.loc[:, 'tumor surgery'] = case_df['tumor surgery'].fillna("unknown")
+    case_df = case_df.drop_duplicates().sort_values('PatientCode')  # .drop_duplicates(['PatientCode', 'Date of TURB'])
+    
+    # retrieve the sample columns
+    sample_df = clean_df.loc[:, tino_sample_cols].sort_values(['PatientCode', 'SampleType'])
+    
+    # import the Tino Data Tables
+
+    df = import_tino_data(tino_data_excel, sheet=tino_data_sheet) # .rename({'SampleName': 'SampleNameAlt', 'Type': 'TypeAlt'}, axis=1)
+    
+    s2_df = sample_df.merge(df.loc[:, ['SampleName', 'Weight', 'SampleType']].drop_duplicates(['SampleName', 'Weight']).rename({'SampleType': 'SerumDrawn'}, axis=1), on="SampleName", how="outer", indicator=True)
+    # message incongruities
+    if (len(incon_df := s2_df.query("_merge == 'right_only'").drop_duplicates())):
+        show_output(f"There is some incongruity between Patient Data and the data tables!\n {incon_df}", color="warning")
+    
+    # modify and rename data
+    s2_df.loc[s2_df['SerumDrawn'].isin(["nodes", "blood"]), "SampleType"] = s2_df["SampleType"] + s2_df['SerumDrawn']
+    sample_df = s2_df.loc[:, [
+        'Project',
+        'PatientCode',
+        'SampleName',
+        'SampleType',
+        'tumor for analysis',
+        'Messrunde',
+        'SerumDrawn',
+        '_merge'
+    ]].rename({
+        'tumor for analysis': 'included',
+        '_merge':'missingInSamples'
+    }, axis=1)
+
+    # modify indicator columns 
+    sample_df.loc[:, 'included'] = sample_df['included'].fillna(0).astype(int)
+    sample_df.loc[:, 'missingInSamples'] = sample_df['missingInSamples'].astype(str)
+    sample_df.loc[sample_df['missingInSamples'] != "right_only", "missingInSamples"] = "0"
+    sample_df.loc[sample_df['missingInSamples'] == "right_only", "missingInSamples"] = "1"
+    sample_df.loc[:, 'missingInSamples'] = sample_df['missingInSamples'].fillna(0).astype(int)
+    
+    # assign the proper plex from the plex data
+    df = df.drop("Plex", axis=1).rename({'Gene':'Protein'}, axis=1).merge(plex_df)
+    well_df = df.loc[:, tino_well_cols].drop_duplicates().sort_values(['Run', 'Plate', 'Plex', 'Well']).reset_index(drop=True)
+    # get conc from all conc data
+    lumi_df = df.loc[:, [
+        'Run',
+        'Plate',
+        'Plex',
+        'Well',
+        'Protein',
+        'conc'
+    ]].sort_values(['Run', 'Plate', 'Plex', 'Well']).reset_index(drop=True)
+
+    # get the qPCR data
+    qPCR_df = clean_df.loc[:, qPCR_cols].dropna(subset="CD3")
+
+    # last edits
+    patient_df = patient_df.rename({"DOT":"DOD"}, axis=1)
+    patient_df['Note'] = ""
+
+    # write to file
+    
+    if excel_out:
+        show_output(f"Writing output to {excel_out}")
+        with pd.ExcelWriter(excel_out, mode="w") as writer:
+            patient_df.to_excel(writer, sheet_name="Patients", index=False)
+            case_df.to_excel(writer, sheet_name="Cases", index=False)
+            sample_df.to_excel(writer, sheet_name="Samples", index=False)
+            well_df.to_excel(writer, sheet_name="Wells", index=False)
+            lumi_df.to_excel(writer, sheet_name="Luminex", index=False)
+            qPCR_df.to_excel(writer, sheet_name="qPCR", index=False)
+    show_output("Finished data aggregation for TinoData!", color="success")
+    return patient_df, case_df, sample_df, well_df, lumi_df, qPCR_df
