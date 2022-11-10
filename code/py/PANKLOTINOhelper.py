@@ -300,7 +300,7 @@ def merge_2122(df21, df22, pat_df):
 
     df21 = format_TinoSampleName(df21, pat_df)
     # format SampleName for merging data from 2021 into the 2022 data
-    df22 = format_TinoSampleName(df22, pat_df).merge(df21.loc[:, ['SampleName', 'DOX', 'Weight', 'Dilution', 'Note']].drop_duplicates())
+    df22 = format_TinoSampleName(df22, pat_df).drop('Note', axis=1).merge(df21.loc[:, ['SampleName', 'DOX', 'Weight', 'Dilution', 'Note']].drop_duplicates())
     df2122 =  pd.concat([df21, df22]).reset_index(drop=True)
     df2122['DOX'] = convert2data(df2122['DOX'])
     return df2122
@@ -451,14 +451,20 @@ def get_tino_all(lumi21_excel, lumi22_excel, tino_master_excel, plexes21=[3,11,2
         'DOD',
         'Sex']
         ).groupby(['Project', 'PatientCode']).agg({'Sex':'first', 'DOD':'first', 'Note':'sum'}).reset_index(drop=False).loc[:, patient_cols]
-
+    # tino_cases have to be condensed as well --> groupby
+    tino_cases = tino_cases.sort_values([
+        'PatientCode',
+        'TumorSurgery'
+    ]).groupby(['Project', 'PatientCode']).first().reset_index(drop=False)
+    
     tino_samples = tino_samples.loc[:, sample_biopsy_cols]
     # keep the luminex DOX data for the samples
     swc = sample_well_cols + ["DOX"]
     # concat the wells because they are unique
     tino_wells = pd.concat([tino_wells, tino2122.loc[:, swc]]).loc[:, swc]
-
-    return df2122.query('Project != "NAC"').drop(['PatientCode', 'suff', 'node'], axis=1), tino_pat_codes, tino_patients, tino_cases, tino_samples, tino_wells
+    # remove other tino_data from df2122
+    df2122 = df2122.query('Project != "NAC"').drop(['PatientCode', 'suff', 'node'], axis=1)
+    return df2122, tino_pat_codes, tino_patients, tino_cases, tino_samples, tino_wells
 
     
 
@@ -629,7 +635,7 @@ def gather_PANKLOTINO(
 
     # create a Method field (can be extended with method ID) to mark the generation from Biopsy (or Sample) to Sample
     sample_df.loc[:, 'Method'] = "ProteinExtraction_Beatblaster"
-    sample_df.loc[:, 'AmountUnit'] = "mg"
+    sample_df.loc[:, 'SourceUnit'] = "mg"
     # use the Run field as Date of Extration (or first use in that case) as an artificial extration time marker
     sample_df.loc[sample_df['DOX'] != sample_df['DOX'], "DOX"] = convert2data(sample_df['Run'])
 

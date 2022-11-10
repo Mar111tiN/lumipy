@@ -12,12 +12,54 @@ merge_col1 = [
     'Well',
     'BiopsyName',
     'DOX',
+    'Method',
     'SourceAmount',
-    'AmountUnit',
+    'SourceUnit',
     'Note_Sample',
     'Note_Well'
     ]
  
+case_cols = [
+    'Disease',
+    'Pathology',
+    'Metast',
+    'Therapy',
+    'Radiotherapy',
+    'TumorSurgery',
+    'DoTURB',
+    'DoRC',
+    'muscle-invasive',
+    'NACresponse',
+    'TumorStateTURB',
+    'TumorGrading',
+    'TumorStateRC'
+    ]
+
+db_cols = [
+    'Project',
+    'PatientCode',
+    'Sex',
+    'DOD',
+    'DOX',
+    'Age'
+] + case_cols + [
+    'BiopsyName',
+    'BioType',
+    'Tissue',
+    'SampleName',
+    'Method',
+    'LumiDOX',
+    'SourceAmount',
+    'SourceUnit',
+    'Dilution',
+    'Run',
+    'RunDesc',
+    'Plate',
+    'Plex',
+    'Well',
+    'Note'
+]
+
 
 ## CONSTANTS for PANKLOTINOhelper
 patient_code_cols = [
@@ -96,7 +138,7 @@ sample_cols = [
     'Method',
     'DOX',
     'SourceAmount',
-    'AmountUnit',
+    'SourceUnit',
     'Note'
 ]
 
