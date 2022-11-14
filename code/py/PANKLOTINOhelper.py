@@ -154,7 +154,7 @@ def lumi21_wells(master_info_excel, plexes21=[3,11,23,38]):
     df.loc[:, "Run"] = df['Run'] - 20000000
     # add all the plexes
     df = expand_plexes(df, plexes21)
-    df.loc[:, ['Plate', 'RunDesc']] = [1, 'LuminexValidation2021']
+    df.loc[:, ['Plate', 'RunDesc']] = [1, 'LuminexValidation2122']
     # reshuffle columns
     return df.loc[:, ['Project', 'Run', 'RunDesc', 'Plate', 'Plex', 'SampleName', 'DOX', 'Well', 'Weight', 'Dilution', 'Note']].reset_index(drop=True)
 
@@ -193,7 +193,7 @@ def lumi22_wells(excel_file, anchor="B4"):
 
     for plate in [1,2]:
         df = read_excel_96plate(excel_file, sheet_name=f"Platte{plate}", anchor=anchor)
-        df.loc[:, ['Run', 'RunDesc', 'Plate', 'Plex', 'Note']] = [220906, "Nachmessung2022-20Plex", plate, "21-Plex", ""]
+        df.loc[:, ['Run', 'RunDesc', 'Plate', 'Plex', 'Note']] = [220906, "LuminexValidation2122", plate, "21-Plex", ""]
         dfs.append(df)
     df = pd.concat(dfs)
     # clean standards and controls
@@ -384,7 +384,8 @@ def get_tino_all(lumi21_excel, lumi22_excel, tino_master_excel, plexes21=[3,11,2
     df21 = lumi21_wells(lumi21_excel, plexes21=plexes21)
     df22 = lumi22_wells(lumi22_excel)
     tino_patients, tino_cases, tino_samples, tino_wells = load_tino_master(tino_master_excel)
-
+    # quick fix
+    tino_wells.loc[:, "RunDesc"] = tino_wells['RunDesc'].str.replace("sss", "ss")
     df2122 = merge_2122(df21, df22, tino_patients)
 
     tino2122 = df2122.query('Project == "NAC"').sort_values(['PatientCode', 'SampleName', 'Note'])
@@ -510,7 +511,9 @@ def get_pankreas(df2122, pancreas_excel):
 
     pank_df.loc[:, 'SampleName'] = pank_df['SampleName'].str.strip(" ").str.replace(r"[ ]+", "_", regex=True)
     pank_df = pank_df.sort_values("PatientCodeAlt")
+
     # extract a sample_type
+    pank_df.loc[pank_df['Tissue'] == "Leber", "Tissue"] = "Liver"
     pank_df.loc[pank_df['SampleName'].str.find("NG") > -1, 'SampleType'] = 'normal ' +  pank_df['Tissue']
     pank_df.loc[pank_df['SampleName'].str.find("TG") > -1, 'SampleType'] = 'tumor ' +  pank_df['Tissue']
 
@@ -564,10 +567,13 @@ def get_LO_data(df2122, LO_excel):
         }, axis=1).query('SampleName != "no serum"')
     # remove space from sample_name
     LO_sample_df['SampleName'] = LO_sample_df['SampleName'].str.replace(r" ([0-9])", r"\1", regex=True).str.replace(" ", "_")
-    LO_sample_df['SampleType'] = 'Lung ' + LO_sample_df['Type']
+    # adjust Sample Type
+    LO_sample_df.loc[LO_sample_df['Type'] != "serum", 'SampleType'] =  LO_sample_df['Type'] + ' Lung'
+    LO_sample_df.loc[LO_sample_df['Type'] != "serum", 'Tissue'] = "Lung"
+    LO_sample_df.loc[LO_sample_df['Type'] == "serum", ['SampleType', 'Tissue']] = ["serum", "Serum"]
     LO_sample_df.loc[LO_sample_df['Type'] == "serum", 'Weight'] = 0
 
-    LO_sample_df.loc[:, ["Tissue", 'Project']] = ["Lung", "LO"]
+    LO_sample_df.loc[:, 'Project'] = "LO"
     # extract the samples
     LO_samples = LO_sample_df.loc[:, sample_biopsy_cols]
     # load the wells from master info but remove
@@ -654,6 +660,11 @@ def gather_PANKLOTINO(
     for col in ['DOX', 'DoTURB', 'DoRC']:
         case_df[col] = pd.to_datetime(case_df[col]).dt.date
     sample_df['DOX'] = pd.to_datetime(sample_df['DOX']).dt.date
+
+    # convert Dilution to ExtrVolume
+    sample_df.loc[sample_df['SourceAmount'] != 0, 'ExtractVolume'] =300 * sample_df['Dilution']
+    sample_df = sample_df.drop('Dilution', axis=1).rename({'DOX':'LumiDOX'}, axis=1)
+    well_df = well_df.rename({'RunDesc': 'RunGroup'}, axis=1)
     ### write to file
     if excel_out:
         show_output(f"Data written to {excel_out}!", color="success")
@@ -743,7 +754,6 @@ def makeTinoMaster(tino_patient_excel, lumi_param_excel="", tino_data_excel="", 
     # last edits
     patient_df = patient_df.rename({"DOT":"DOD"}, axis=1)
     patient_df['Note'] = ""
-
     # write to file
     
     if excel_out:
