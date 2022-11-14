@@ -144,17 +144,16 @@ def format_TinoSampleName(df, pat_df):
     .str.lstrip("0") \
     .str.replace("CP2", "CP") \
     .str.replace("^([0-9]+)", r"P\1", regex=True) \
-    .str.replace(r" [0-9]+\.[0-9]$", "", regex=True) \
     .str.replace(" K[0-9]", "", regex=True) \
     .str.replace("Node ", "P") # change P to node
-    # extract PatientCode, Type and node from SampleName
-    df.loc[df['Project'] == "NAC", ['PatientCode', 'suff', 'node']] = df['SampleName'].str.extract(r"(?P<PatientCode>^[A-Z][-A-Z0-9.]+) (?P<suff>[PTIFC]+[0-9]*)(?: (?P<node>[SN]+))?")
-    
+    # extract PatientCode, Type, node and repeat extension 10.(1/2) as rep) from SampleName
+    df.loc[df['Project'] == "NAC", ['PatientCode', 'suff', 'node', 'rep']] = df['SampleName'].str.extract(r"(?P<PatientCode>^[A-Z][-A-Z0-9.]+) (?P<suff>[PTIFC]+[0-9]*)(?: (?P<node>[SN]+) [0-9]+\.(?P<rep>[0-9]$))?")
     # merge in the patientname
     df = df.merge(pat_df.rename({'PatientCodeAlt':'PatientCode', 'PatientCode':'PatientCodeAlt'}, axis=1).iloc[:, :2], how='left')
     
     df.loc[df['PatientCodeAlt'] == df['PatientCodeAlt'], 'PatientCode'] = df['PatientCodeAlt']
     df.loc[df['Project'] == "NAC", "SampleName"] = df['PatientCode'] + "_" + df['suff']
+    df.loc[df['rep'] == df['rep'], "SampleName"] = df['SampleName'] + "-" + df['rep']
     return df.drop('PatientCodeAlt', axis=1)
 
 
@@ -175,10 +174,12 @@ def merge_2122(df21, df22, pat_df):
     '''
 
     df21 = format_TinoSampleName(df21, pat_df)
+
     # format SampleName for merging data from 2021 into the 2022 data
     df22 = format_TinoSampleName(df22, pat_df).drop('Note', axis=1).merge(df21.loc[:, ['SampleName', 'DOX', 'Weight', 'Dilution', 'Note']].drop_duplicates())
     df2122 =  pd.concat([df21, df22]).reset_index(drop=True)
     df2122['DOX'] = convert2data(df2122['DOX'])
+    df2122['SampleName'] = df2122['SampleName'].str.replace(r"-[0-9]$", "", regex=True)
     return df2122
 
 
@@ -493,26 +494,26 @@ def gather_PANKLOTINO(
     well_df = pd.concat([tino_wells, pank_wells, LO_wells]).sort_values(['Project', 'Run', 'SampleName', 'Well']).reset_index(drop=True)
     for col in ['Plate', 'Run']:
         well_df.loc[:, col] = well_df[col].fillna(1).astype(int)
-
+    well_df['rep'] = well_df['rep'].fillna(0).astype(int)
     ####### create the biopsy
     # turn SampleName into BiopsyName and rename sample_df to biopsy_df
     # add counter value for cumsumming
-    # sort by Run data and remove duplicates for SampleName and Weight (to keep the earliest)
+    # sort by Run data and remove duplicates for SampleName, Weight and rep (for repeats from 21/22) (to keep the earliest)
     # place the cumsum into that df as indicator
     biopsy_df = sample_df.copy().rename({'SampleName': 'BiopsyName', 'SampleType': 'BioType'}, axis=1)
 
     sample_df = well_df.copy()
     sample_df.loc[:, "counter"] = 1
-    sample_df = sample_df.sort_values("Run").drop_duplicates(['SampleName', 'Weight']).reset_index(drop=True)
+    sample_df = sample_df.sort_values("Run").drop_duplicates(['SampleName', 'Weight', 'rep']).reset_index(drop=True)
     # get the count_info by cumsumming the counter per SampleName (de-duplicated for SampleName+Weight) --> one number per weight
-    sample_df['cum'] = sample_df.groupby(['SampleName'])['counter'].cumsum()
+    sample_df['count'] = sample_df.groupby(['SampleName'])['counter'].cumsum()
     # create BiopsyName field
     sample_df.loc[:, "BiopsyName"] = sample_df['SampleName']
-    sample_df.loc[:, "SampleName"] = sample_df['BiopsyName'] + "_#" + sample_df['cum'].astype(str)
+    sample_df.loc[:, "SampleName"] = sample_df['BiopsyName'] + "_#" + sample_df['count'].astype(str)
     ### split sample_df into well_df and the actual (brand_new) sample_df
     # move the Sample_name into the well_df
-    # merge the SampleNames into the well_df based on BiopsyName and Weight
-    well_df = well_df.rename({'SampleName': 'BiopsyName'}, axis=1).merge(sample_df.loc[:, ['Weight', 'BiopsyName', 'SampleName']], how="inner")
+    # merge the SampleNames into the well_df based on BiopsyName, Weight and rep
+    well_df = well_df.rename({'SampleName': 'BiopsyName'}, axis=1).merge(sample_df.loc[:, ['Weight', 'BiopsyName', 'SampleName', 'rep']], how="inner")
     well_df = well_df.loc[:, well_cols]
 
     # create a Method field (can be extended with method ID) to mark the generation from Biopsy (or Sample) to Sample

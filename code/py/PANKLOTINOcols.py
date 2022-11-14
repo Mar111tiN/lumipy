@@ -53,6 +53,7 @@ sample_well_cols = [
     'Note',
     'Weight',
     'Dilution',
+    'rep',
     'Well'
 ]
 
